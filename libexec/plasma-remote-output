@@ -1,0 +1,40 @@
+#!/usr/bin/python3
+"""Make krfb's exported monitor the sole active output, including the desktop panel."""
+import json
+import os
+import subprocess
+import sys
+import time
+
+
+def outputs():
+    result = subprocess.run(["kscreen-doctor", "-j"], capture_output=True, text=True, timeout=5, check=True)
+    return json.loads(result.stdout)["outputs"]
+
+
+def configured(items):
+    active = [item for item in items if item["enabled"]]
+    return len(active) == 1 and active[0]["name"] == "Virtual-Plasma" and active[0]["pos"] == {"x": 0, "y": 0}
+
+
+if os.environ["DISPLAY_BACKEND"] == "wayland":
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            items = outputs()
+            if "--check" in sys.argv:
+                sys.exit(0 if configured(items) else 1)
+            if configured(items):
+                break
+            remote = next((item for item in items if item["name"] == "Virtual-Plasma"), None)
+            if remote:
+                commands = [f"output.{remote['id']}.enable", f"output.{remote['id']}.position.0,0",
+                            f"output.{remote['id']}.priority.1"]
+                commands += [f"output.{item['id']}.disable" for item in items if item is not remote and item["enabled"]]
+                subprocess.run(["kscreen-doctor", *commands], check=True, timeout=5)
+        except (subprocess.SubprocessError, json.JSONDecodeError) as error:
+            if "--check" in sys.argv or time.monotonic() >= deadline:
+                sys.exit(str(error))
+        if time.monotonic() >= deadline:
+            sys.exit("Timed out configuring the Plasma VNC monitor")
+        time.sleep(0.25)

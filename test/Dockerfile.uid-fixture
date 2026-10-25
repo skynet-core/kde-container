@@ -1,0 +1,6 @@
+# A deliberately different image account to verify runtime remapping, not a host-specific build.
+ARG TEST_IMAGE=plasma6:local
+FROM ${TEST_IMAGE}
+RUN groupmod --gid 2000 plasma \
+    && usermod --uid 2000 --gid 2000 plasma \
+    && chown -R 2000:2000 /home/plasma

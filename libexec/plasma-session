@@ -1,0 +1,12 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+if [[ $DISPLAY_BACKEND == x11 ]]; then
+    /usr/local/libexec/plasma-wait x11
+    exec /usr/bin/startplasma-x11
+fi
+
+# Plasma starts kwin_wayland_wrapper, which owns the sockets and publishes the
+# client environment. Its kwin_wayland child resolves through this mode adapter.
+export PATH="/usr/local/libexec/plasma-backend:$PATH"
+exec /usr/bin/startplasma-wayland

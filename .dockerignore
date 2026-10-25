@@ -1,0 +1,15 @@
+*
+!Dockerfile
+!init.d/
+!init.d/**
+!bin/
+!bin/**
+!libexec/
+!libexec/**
+!systemd/
+!systemd/**
+!config/
+!config/**
+!native/
+!native/**
+**/__pycache__

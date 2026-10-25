@@ -1,0 +1,17 @@
+#!/usr/bin/bash
+set -euo pipefail
+# Preserve the socket FDs and Xwayland authentication supplied by KDE's wrapper.
+unset WAYLAND_DISPLAY DISPLAY QT_QPA_PLATFORM
+args=(--no-lockscreen --width "$DISPLAY_WIDTH" --height "$DISPLAY_HEIGHT")
+if [[ $DISPLAY_MODE == nested ]]; then
+    case $HOST_DISPLAY_BACKEND in
+        wayland) args+=(--wayland-display "$HOST_WAYLAND_DISPLAY") ;;
+        x11)
+            export XAUTHORITY=$HOST_XAUTHORITY
+            args+=(--x11-display "$HOST_DISPLAY")
+            ;;
+    esac
+else
+    args+=(--virtual)
+fi
+exec /usr/bin/kwin_wayland "${args[@]}" "$@"

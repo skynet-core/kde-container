@@ -1,0 +1,27 @@
+#!/usr/bin/python3
+"""Check the selected target, desktop bus name and enabled transports."""
+import os
+import shlex
+import subprocess
+
+environment = os.environ.copy()
+with open("/etc/plasma/session.env") as config:
+    for line in config:
+        key, value = shlex.split(line)[0].split("=", 1)
+        environment[key] = value
+environment["PLASMA_WAIT_TIMEOUT"] = "0"
+subprocess.run(
+    ["systemctl", "is-active", "--quiet",
+     f"plasma-{environment['DISPLAY_BACKEND']}-{environment['DISPLAY_MODE']}.target",
+     "plasma-session.service"], check=True,
+)
+probes = ["desktop"]
+if environment["DISPLAY_MODE"] in ("vnc", "web"):
+    probes.append("vnc")
+    subprocess.run(["runuser", "-u", "plasma", "--", "/usr/local/libexec/plasma-remote-output", "--check"],
+                   env=environment, check=True)
+if environment["DISPLAY_MODE"] == "web":
+    probes.append("web")
+for probe in probes:
+    subprocess.run(["runuser", "-u", "plasma", "--", "/usr/local/libexec/plasma-wait", probe],
+                   env=environment, check=True)
