@@ -2,6 +2,7 @@
 Description=Plasma 6 desktop session
 Requires=plasma-dbus.service
 After=plasma-dbus.service
+After=plasma-software-display.service
 
 [Service]
 Type=exec

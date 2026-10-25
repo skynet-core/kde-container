@@ -42,6 +42,27 @@ class InitTests(unittest.TestCase):
     def test_no_host_defaults_to_wayland(self):
         self.assertEqual(self.boot()["DISPLAY_BACKEND"], "wayland")
 
+    def test_vnc_frame_rate(self):
+        self.assertEqual(self.boot()["VNC_MAX_FPS"], "60")
+        self.assertEqual(self.boot(VNC_MAX_FPS="30")["VNC_MAX_FPS"], "30")
+        for value in ("0", "61", "-1", "1.5", "oops"):
+            with self.subTest(value=value):
+                self.assertIn("VNC_MAX_FPS", self.boot(expected=1, VNC_MAX_FPS=value))
+
+    def test_gpu_preference_and_software_override(self):
+        automatic = self.boot()
+        self.assertIn(automatic["LIBGL_ALWAYS_SOFTWARE"], ("0", "1"))
+        software = self.boot(LIBGL_ALWAYS_SOFTWARE="1")
+        self.assertEqual(software["LIBGL_ALWAYS_SOFTWARE"], "1")
+        self.assertEqual(software["QT_QUICK_BACKEND"], "software")
+        self.assertEqual(software["PLASMA_SOFTWARE_CAPTURE"], "0")
+        remote = self.boot(DISPLAY_BACKEND="wayland", DISPLAY_MODE="web", LIBGL_ALWAYS_SOFTWARE="1")
+        self.assertEqual(remote["PLASMA_SOFTWARE_CAPTURE"], "1")
+        self.assertEqual(remote["PLASMA_SOFTWARE_DISPLAY"], ":110")
+        x11 = self.boot(DISPLAY_BACKEND="x11", DISPLAY_MODE="vnc", LIBGL_ALWAYS_SOFTWARE="1")
+        self.assertEqual(x11["PLASMA_SOFTWARE_CAPTURE"], "0")
+        self.assertIn("LIBGL_ALWAYS_SOFTWARE", self.boot(expected=1, LIBGL_ALWAYS_SOFTWARE="invalid"))
+
     def test_wayland_priority_and_x11_fallback(self):
         Path("/run/host/X11").mkdir(parents=True, exist_ok=True)
         with socket.socket(socket.AF_UNIX) as wayland, socket.socket(socket.AF_UNIX) as x11:

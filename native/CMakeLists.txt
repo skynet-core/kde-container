@@ -23,3 +23,6 @@ target_link_libraries(kwin PRIVATE Qt6::Widgets KF6::CoreAddons PkgConfig::WAYLA
 
 add_executable(plasma-ui-fixture ui-fixture.cpp)
 target_link_libraries(plasma-ui-fixture PRIVATE Qt6::Widgets)
+
+add_executable(plasma-vnc-benchmark vnc-benchmark.cpp)
+target_link_libraries(plasma-vnc-benchmark PRIVATE Qt6::Widgets)

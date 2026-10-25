@@ -1,0 +1,13 @@
+flowchart TD
+    tmp["Temporary file setup"]
+    host["Host X11 preparation"]
+    bus["Private D-Bus"]
+    session["Desktop session"]
+    pw["PipeWire"]
+    wp["WirePlumber"]
+    vnc["VNC and output setup"]
+    web["Web proxy"]
+    tmp --> host --> bus
+    bus --> session --> vnc
+    bus --> pw --> wp --> vnc
+    vnc --> web

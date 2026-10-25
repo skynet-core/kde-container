@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant T as Host harness
+    participant H as Host file
+    participant R as Runtime
+    participant U as Qt editor
+    participant V as VNC path
+    T->>H: Create empty file, permissions 0600
+    T->>R: Start container and bind this file
+    T->>R: Wait for desktop and launch editor
+    R->>U: Start editor with mounted output path
+    T->>V: Authenticate and request screenshot
+    V-->>T: Initial window framebuffer
+    T->>V: Mouse press, motion, release
+    V->>U: Window drag through compositor
+    T->>V: Request second screenshot
+    V-->>T: Window framebuffer after drag
+    T->>T: Measure banner displacement
+    T->>V: Click editor, type text, press Ctrl+S
+    V->>U: Keyboard and pointer events
+    U->>H: Save text through the bind mount
+    T->>H: Read and compare exact content
+    T->>T: Save screenshots, JSON and logs
+    T->>R: Remove test container

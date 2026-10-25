@@ -7,6 +7,7 @@ shellcheck "$root"/init.d/modules/*.sh "$root"/bin/plasma6-run \
     "$root"/libexec/plasma-session "$root"/libexec/plasma-xserver "$root"/libexec/plasma-vnc
 shellcheck "$root"/libexec/plasma-backend/kwin_wayland
 shellcheck "$root"/libexec/plasma-host-display
+shellcheck "$root"/libexec/plasma-software-display
 "$runtime" run --rm --user root --entrypoint /usr/bin/python3 \
     --mount "type=bind,source=$root/test,target=/test,readonly" "$image" /test/check-init.py
 "$runtime" run --rm --user root --entrypoint /usr/bin/bash "$image" -c \

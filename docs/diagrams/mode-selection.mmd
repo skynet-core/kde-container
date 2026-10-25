@@ -1,0 +1,25 @@
+flowchart TD
+    mounts["Inspect mounted host display sockets"]
+    wl{"Wayland socket available?"}
+    x{"X11 socket available?"}
+    hw["Host transport = wayland"]
+    hx["Host transport = x11"]
+    hn["Host transport = none"]
+    nested{"Nested mode with no host transport?"}
+    fail["Fail before starting systemd"]
+    requested{"Automatic backend requested?"}
+    auto["Use host transport; choose wayland if none"]
+    explicit["Use explicitly requested wayland or x11 backend"]
+    target["Select backend and mode target"]
+    mounts --> wl
+    wl -->|yes| hw
+    wl -->|no| x
+    x -->|yes| hx
+    x -->|no| hn
+    hw --> nested
+    hx --> nested
+    hn --> nested
+    nested -->|yes| fail
+    nested -->|no| requested
+    requested -->|yes| auto --> target
+    requested -->|no| explicit --> target

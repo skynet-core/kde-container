@@ -1,0 +1,20 @@
+{
+  "theme": "neutral",
+  "fontFamily": "DejaVu Sans, sans-serif",
+  "fontSize": 16,
+  "htmlLabels": false,
+  "flowchart": {
+    "htmlLabels": false,
+    "curve": "linear",
+    "useMaxWidth": true
+  },
+  "sequence": {
+    "useMaxWidth": true,
+    "wrap": true,
+    "width": 110,
+    "actorMargin": 20,
+    "actorFontSize": 14,
+    "messageFontSize": 14,
+    "noteFontSize": 14
+  }
+}

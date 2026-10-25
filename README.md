@@ -1,5 +1,10 @@
 # Plasma 6 container
 
+For a commented, diagram-led explanation of the project, read
+**[How this project works: a beginner's technical guide](docs/README.md)**.
+The guide covers Linux containers, image builds, boot and systemd, all display
+paths, remote input, UID mapping, troubleshooting, and the UI regression tests.
+
 Fedora 44 Plasma 6 desktop on
 [`ghcr.io/skynet-core/systemd:fedora-44`](https://github.com/skynet-core/systemd).
 Systemd runs as PID 1; the desktop, private D-Bus and remote-access services run as
@@ -273,7 +278,8 @@ container's configured environment.
 | `HOST_XAUTHORITY` | `$XAUTHORITY` | Container path to the host X11 cookie file |
 | `VNC_PASSWORD_FILE` | unset | Password file; takes precedence over `VNC_PASSWORD` |
 | `VNC_PASSWORD` | unset | Password when no file is provided |
-| `LIBGL_ALWAYS_SOFTWARE` | `1` | Set `0` and expose `/dev/dri` for GPU rendering |
+| `VNC_MAX_FPS` | `60` | Remote update rate, 1–60; lower it to reduce CPU/network use |
+| `LIBGL_ALWAYS_SOFTWARE` | `0` | Prefer an accessible GPU; software fallback remains available |
 | `INIT_LOG_LEVEL` | inherited (`2`) | Base framework logging level |
 
 Build arguments: `BASE_IMAGE=ghcr.io/skynet-core/systemd:fedora-44`,
@@ -315,6 +321,38 @@ The build stage contains development packages; the runtime contains only the plu
 monitor appears, then places the exported monitor at `(0, 0)`. The panel and windows
 therefore appear on the remote desktop. X11 remote mode uses x11vnc.
 
+### Rendering and VNC responsiveness
+
+The default prefers GPU/OpenGL rendering when the container can open a compatible
+GPU render node. With no usable GPU, KWin's virtual backend falls back to QPainter;
+Mesa clients can use software rendering. The image includes Mesa drivers. The
+privileged Docker commands above expose available devices; rootless Podman also
+requires the host user to have permission to open them. A device mount alone does
+not grant host permissions or install proprietary GPU drivers.
+
+Inspect the actual compositor rather than inferring it from an environment value:
+
+```bash
+docker exec --user=plasma plasma6-web env \
+  XDG_RUNTIME_DIR=/run/plasma DBUS_SESSION_BUS_ADDRESS=unix:path=/run/plasma/bus \
+  qdbus-qt6 org.kde.KWin /KWin supportInformation
+# Replace docker with podman and use your container's name.
+# Look for Compositing Type and OpenGL renderer string.
+```
+
+Wayland remote mode builds the pinned upstream KRFB executable and PipeWire plugin
+with [a small performance patch](patches/krfb-low-latency.patch): request changed
+screen regions, remove an extra LibVNCServer frame delay, and replace the fixed
+50 ms update timer with a precise timer controlled by `VNC_MAX_FPS` (default 60).
+X11 mode uses the same setting for x11vnc polling and disables its extra frame
+deferral. Actual frame rates depend on rendering, encoding, client and network.
+
+For less CPU/bandwidth, add `-e VNC_MAX_FPS=30` or lower the initial dimensions with
+`-e DISPLAY_WIDTH=1280 -e DISPLAY_HEIGHT=720` when creating the container. noVNC's
+Quality and Compression controls tune image quality and encoding cost; higher
+compression uses more server CPU. Settings are also accepted in the browser URL,
+for example `http://127.0.0.1:6080/vnc.html?quality=6&compression=1`.
+
 ## Validation
 
 Basic target, namespace, readiness and framebuffer checks:
@@ -353,6 +391,29 @@ Each case retains before/after drag PNGs, a side-by-side comparison, a screensho
 text after Save, the actual host file, JSON assertions, and service/container logs
 under `test/.artifacts/`. The suite checks the same UI behavior over noVNC's actual
 WebSocket proxy. Test windows and input go only to the container display.
+
+The performance suite drives the real noVNC JavaScript client in Chromium at
+1920×1080. It counts visible native-app animation changes, measures keyboard-event
+to canvas feedback, and validates window dragging with screenshots:
+
+```bash
+docker build --target ui-test -t plasma6:ui-test .
+uv run test/performance.py --image plasma6:ui-test --expect-renderer gpu
+# Hide GPU nodes to test automatic software fallback, without forcing a renderer:
+uv run test/performance.py --image plasma6:ui-test --no-gpu --expect-renderer software
+# Rootless Podman uses its own image store:
+uv run test/performance.py --runtime podman --image plasma6:ui-test
+
+# Compare with unmodified Fedora KRFB, retaining the working input plugin:
+docker build --target ui-perf-baseline -t plasma6:perf-before .
+uv run test/performance.py --image plasma6:perf-before --measure-only
+```
+
+Install Chromium on the host first. `uv` supplies Playwright and Pillow; the test
+uses the system `chromium` executable. Default thresholds are 25 visible fps and
+150 ms keyboard p95 on local transport, and can be adjusted for slower CI hosts.
+JSON timings, renderer information, logs and screenshots survive teardown under
+`test/.artifacts/performance-*`. The production image excludes both test programs.
 
 To reproduce the original Wayland failure, build `--target ui-baseline` and run
 `test/ui.py --image plasma6:ui-baseline --backends wayland --modes vnc`. That target

@@ -14,7 +14,8 @@ def outputs():
 
 def configured(items):
     active = [item for item in items if item["enabled"]]
-    return len(active) == 1 and active[0]["name"] == "Virtual-Plasma" and active[0]["pos"] == {"x": 0, "y": 0}
+    software = os.environ.get("PLASMA_SOFTWARE_CAPTURE") == "1"
+    return len(active) == 1 and (software or active[0]["name"] == "Virtual-Plasma") and active[0]["pos"] == {"x": 0, "y": 0}
 
 
 if os.environ["DISPLAY_BACKEND"] == "wayland":

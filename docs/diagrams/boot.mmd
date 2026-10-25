@@ -1,0 +1,15 @@
+flowchart TD
+    start["Entrypoint shell: PID 1"]
+    common["Load common helpers and module definitions"]
+    identity["300: prepare account IDs"]
+    configure["400: configure mode and credentials"]
+    target["501: link default target"]
+    handoff["999: exec systemd"]
+    systemd["systemd now occupies the same PID 1"]
+    profile["Activate selected profile"]
+    services["Start required services in dependency order"]
+    ready["Readiness probes and health check"]
+    error["Stop before boot with an error"]
+    start --> common --> identity --> configure --> target --> handoff --> systemd --> profile --> services --> ready
+    identity -->|"invalid identity"| error
+    configure -->|"invalid mode, credentials, or missing nested socket"| error

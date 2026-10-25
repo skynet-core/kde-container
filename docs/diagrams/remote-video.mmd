@@ -1,0 +1,10 @@
+flowchart TD
+    kwin["KWin virtual output"] -->|"KDE screencast stream"| pw["PipeWire frames"]
+    pw --> krfb["KRFB virtual monitor"]
+    xvfb["Xvfb display"] --> x11vnc["x11vnc"]
+    krfb --> rfb["RFB server on TCP 5900"]
+    x11vnc --> rfb
+    rfb -->|"framebuffer updates"| viewer["Native VNC client"]
+    rfb -->|"container loopback TCP"| proxy["websockify on TCP 6080"]
+    assets["/opt/noVNC static files"] -->|"served over HTTP"| browser["Browser running noVNC"]
+    proxy -->|"RFB over WebSocket"| browser

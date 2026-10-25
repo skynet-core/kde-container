@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG BASE_IMAGE=ghcr.io/skynet-core/systemd:fedora-44
-FROM ${BASE_IMAGE} AS desktop
+FROM ${BASE_IMAGE} AS desktop-packages
 
 ARG PLASMA_UID=1000
 ARG PLASMA_GID=1000
@@ -32,6 +32,7 @@ RUN dnf install -y \
     && ln -s vnc.html /opt/noVNC/index.html \
     && rm /tmp/novnc.tar.gz
 
+FROM desktop-packages AS desktop
 # Extend the inherited /init.d/init.sh; 400 runs before 501-systemd and 999-exec.
 COPY init.d/modules/ /init.d/modules/
 COPY bin/ /usr/local/bin/
@@ -60,7 +61,7 @@ CMD ["/usr/sbin/init", "--system"]
 
 # KRFB's virtual monitor has no portal session. Build its KWin input plugin
 # against the same private library as the runtime, leaving compilers out of it.
-FROM desktop AS input-build
+FROM desktop-packages AS input-build
 ARG KRFB_SOURCE_VERSION=26.08.1
 ARG KRFB_SOURCE_SHA256=fb2e89fb9defdf5d3acd1cac172863b0adc45793961210c152ef3872fb875f5d
 RUN dnf install -y cmake ninja-build gcc-c++ qt6-qtbase-devel \
@@ -80,12 +81,41 @@ RUN cmake -S /src -B /build -G Ninja -DKRFB_SOURCE_DIR=/krfb-source \
 FROM desktop AS ui-baseline
 COPY --from=input-build /build/plasma-ui-fixture /usr/local/bin/plasma-ui-fixture
 
-FROM desktop AS runtime
+FROM desktop AS input-runtime
 COPY --from=input-build /build/kwin.so /usr/lib64/qt6/plugins/krfb/events/kwin.so
 RUN sed -i '/^X-KDE-Wayland-Interfaces=/s/$/,org_kde_kwin_fake_input/' \
         /usr/share/applications/org.kde.krfb.virtualmonitor.desktop
 
+# Keep a working-input image with Fedora's unmodified KRFB for A/B benchmarks.
+FROM input-runtime AS ui-perf-baseline
+COPY --from=input-build /build/plasma-vnc-benchmark /usr/local/bin/plasma-vnc-benchmark
+
+# Rebuild upstream's virtual monitor and capture plugin with small latency fixes.
+# Event plugins and libkrfbprivate remain the Fedora packages.
+FROM input-build AS vnc-build
+RUN dnf install -y patch extra-cmake-modules qt6-qtbase-private-devel \
+        kf6-kconfig-devel kf6-ki18n-devel kf6-kdbusaddons-devel kf6-kdnssd-devel \
+        kf6-kdoctools-devel kf6-knotifications-devel kf6-kwallet-devel \
+        kf6-kwidgetsaddons-devel kf6-kwindowsystem-devel kf6-kxmlgui-devel \
+        kf6-kstatusnotifieritem-devel kf6-kcrash-devel \
+        libxcb-devel xcb-util-image-devel libXdamage-devel libXtst-devel \
+    && dnf clean all
+RUN dnf install -y lzo-devel libjpeg-turbo-devel libpng-devel libgcrypt-devel \
+        gnutls-devel openssl-devel systemd-devel zlib-devel kpipewire-devel pipewire-devel \
+        plasma-wayland-protocols-devel kwayland-devel qt6-qtwayland-devel \
+    && dnf clean all
+COPY patches/krfb-low-latency.patch /tmp/krfb-low-latency.patch
+RUN patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-low-latency.patch \
+    && cmake -S /krfb-source -B /krfb-build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    && cmake --build /krfb-build --target krfb-virtualmonitor krfb_framebuffer_pw
+
+FROM input-runtime AS runtime
+COPY --from=vnc-build /krfb-build/bin/krfb-virtualmonitor /usr/bin/krfb-virtualmonitor
+COPY --from=vnc-build /krfb-build/bin/pw.so /usr/lib64/qt6/plugins/krfb/framebuffer/pw.so
+
 FROM runtime AS ui-test
 COPY --from=input-build /build/plasma-ui-fixture /usr/local/bin/plasma-ui-fixture
+COPY --from=input-build /build/plasma-vnc-benchmark /usr/local/bin/plasma-vnc-benchmark
 
 FROM runtime AS plasma6

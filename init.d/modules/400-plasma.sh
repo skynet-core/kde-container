@@ -21,6 +21,9 @@ module_plasma_run() {
 
     case $mode in headless|vnc|nested|web) ;; *) die "Invalid DISPLAY_MODE '$mode'" ;; esac
     case $backend in auto|wayland|x11) ;; *) die "Invalid DISPLAY_BACKEND '$backend'" ;; esac
+    [[ ${VNC_MAX_FPS:-60} =~ ^([1-9]|[1-5][0-9]|60)$ ]] || die 'VNC_MAX_FPS must be an integer between 1 and 60'
+    local software=${LIBGL_ALWAYS_SOFTWARE:-0}
+    [[ $software == 0 || $software == 1 ]] || die 'LIBGL_ALWAYS_SOFTWARE must be 0 or 1'
     for number in "${DISPLAY_WIDTH:-1920}" "${DISPLAY_HEIGHT:-1080}"; do
         [[ $number =~ ^[1-9][0-9]{1,3}$ ]] || die 'Display dimensions must be between 10 and 9999'
     done
@@ -68,6 +71,28 @@ module_plasma_run() {
     [[ $mode != nested || $host_backend != none ]] || die 'nested mode requires a mounted host Wayland or X11 socket'
     info "Plasma: $backend:$mode (host transport: $host_backend)"
 
+    # Check access as the service user: root's device access is not sufficient.
+    # An unavailable GPU also needs a software Qt Quick backend, so portal and
+    # desktop applications can start without attempting an unusable EGL display.
+    if [[ $software == 0 ]] && ! runuser -u plasma -- /usr/bin/python3 - <<'PY'
+import os
+from pathlib import Path
+import sys
+
+for device in Path('/dev/dri').glob('renderD*'):
+    try:
+        descriptor = os.open(device, os.O_RDWR | os.O_CLOEXEC)
+    except OSError:
+        continue
+    os.close(descriptor)
+    sys.exit(0)
+sys.exit(1)
+PY
+    then
+        software=1
+        info 'Plasma: no accessible GPU render node; using software fallback'
+    fi
+
     install -d /etc/plasma /tmp/.X11-unix
     chmod 1777 /tmp/.X11-unix
     # Copy host cookies without binding them to the host's hostname.
@@ -85,9 +110,15 @@ module_plasma_run() {
     fi
     local desktop_display=:100
     [[ $host_x11 != :100 ]] || desktop_display=:101
+    local software_display=:110 software_capture=0
+    [[ $host_x11 != :110 ]] || software_display=:111
+    if [[ $backend == wayland && $software == 1 && ( $mode == vnc || $mode == web ) ]]; then
+        software_capture=1
+    fi
     rm -f /etc/plasma/Xauthority
     touch /etc/plasma/Xauthority
     xauth -f /etc/plasma/Xauthority add "$desktop_display" . "$(mcookie)"
+    xauth -f /etc/plasma/Xauthority add "$software_display" . "$(mcookie)"
     chown plasma: /etc/plasma/Xauthority
     chmod 600 /etc/plasma/Xauthority
 
@@ -112,6 +143,7 @@ module_plasma_run() {
         plasma_write_env DISPLAY_BACKEND "$backend"
         plasma_write_env DISPLAY_WIDTH "${DISPLAY_WIDTH:-1920}"
         plasma_write_env DISPLAY_HEIGHT "${DISPLAY_HEIGHT:-1080}"
+        plasma_write_env VNC_MAX_FPS "${VNC_MAX_FPS:-60}"
         plasma_write_env HOST_DISPLAY_BACKEND "$host_backend"
         plasma_write_env HOST_WAYLAND_DISPLAY "$host_wayland"
         plasma_write_env HOST_DISPLAY "$host_x11"
@@ -128,6 +160,8 @@ module_plasma_run() {
         plasma_write_env LOGNAME plasma
         plasma_write_env XAUTHORITY /etc/plasma/Xauthority
         plasma_write_env PLASMA_X11_DISPLAY "$desktop_display"
+        plasma_write_env PLASMA_SOFTWARE_CAPTURE "$software_capture"
+        plasma_write_env PLASMA_SOFTWARE_DISPLAY "$software_display"
         if [[ $backend == x11 ]]; then
             plasma_write_env DISPLAY "$desktop_display"
             plasma_write_env QT_QPA_PLATFORM xcb
@@ -135,7 +169,10 @@ module_plasma_run() {
             plasma_write_env WAYLAND_DISPLAY wayland-0
             plasma_write_env QT_QPA_PLATFORM wayland
         fi
-        plasma_write_env LIBGL_ALWAYS_SOFTWARE "${LIBGL_ALWAYS_SOFTWARE:-1}"
+        plasma_write_env LIBGL_ALWAYS_SOFTWARE "$software"
+        if [[ $software == 1 ]]; then
+            plasma_write_env QT_QUICK_BACKEND software
+        fi
         plasma_write_env LANG "${LANG:-C.UTF-8}"
     } > /etc/plasma/session.env
     chmod 644 /etc/plasma/session.env

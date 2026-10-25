@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--image", default=os.environ.get("IMAGE_TAG", "plasma6:ui-test"))
     parser.add_argument("--backends", nargs="+", choices=("wayland", "x11"), default=("wayland", "x11"))
     parser.add_argument("--modes", nargs="+", choices=("vnc", "web"), default=("vnc", "web"))
+    parser.add_argument("--no-gpu", action="store_true", help="Hide render nodes to test automatic software fallback")
     options = parser.parse_args()
     runtime = options.runtime
     artifacts = Path(__file__).resolve().parent / ".artifacts" / f"ui-{runtime}-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
@@ -68,6 +69,8 @@ def main():
                 args += ["--systemd=always", "--passwd=false", "--userns=keep-id"]
             else:
                 args += ["--userns=host"]
+            if options.no_gpu:
+                args += ["--tmpfs", "/dev/dri:mode=0755"]
             report = {"backend": backend, "mode": mode, "runtime": runtime, "checks": {}}
             client = None
             try:

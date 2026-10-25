@@ -1,0 +1,9 @@
+flowchart LR
+    subgraph docker["Rootful Docker with userns=host"]
+        droot["Container systemd: UID 0"] --> hroot["Host kernel identity: UID 0"]
+        duser["Desktop after init: UID 1000"] --> huser["Host kernel identity: UID 1000"]
+    end
+    subgraph podman["Rootless Podman with keep-id: conceptual mapping"]
+        proot["Container systemd: UID 0"] --> subuid["Subordinate host UID: e.g. 100000"]
+        puser["Desktop after init: UID 1000"] --> caller["Calling host user: UID 1000"]
+    end

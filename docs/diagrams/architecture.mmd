@@ -1,0 +1,22 @@
+flowchart TB
+    terminal["Host terminal"]
+    runtime["Container runtime"]
+    kernel["Shared Linux host kernel"]
+    terminal --> runtime
+    subgraph container["Plasma container"]
+        init["systemd PID 1"]
+        bus["Session D-Bus"]
+        desktop["Plasma and KWin"]
+        display["Private Wayland / X11"]
+        remote["Optional VNC / web"]
+        init --> bus
+        init --> desktop
+        init --> remote
+        desktop --> display
+        display --> remote
+    end
+    runtime --> container
+    init -. "processes and cgroups" .-> kernel
+    display -. "sockets and memory" .-> kernel
+    display -->|"nested mode"| hostdisplay["Host desktop window"]
+    remote -->|"vnc or web mode"| viewer["VNC client or browser"]

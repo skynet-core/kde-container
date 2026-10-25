@@ -1,0 +1,15 @@
+flowchart LR
+    subgraph container["Container desktop choices"]
+        ww["Wayland apps and nested KWin Wayland"]
+        xw["X11 apps and KWin X11 on rootful Xwayland"]
+        wx["Wayland apps and X11-windowed KWin Wayland"]
+        xx["X11 apps and KWin X11 on Xephyr"]
+    end
+    subgraph host["Host display server"]
+        whost["Host Wayland compositor"]
+        xhost["Host X11 server"]
+    end
+    ww -->|"Wayland socket"| whost
+    xw -->|"Wayland socket"| whost
+    wx -->|"X11 socket and cookie"| xhost
+    xx -->|"X11 socket and cookie"| xhost

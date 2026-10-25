@@ -12,4 +12,6 @@
 !config/**
 !native/
 !native/**
+!patches/
+!patches/**
 **/__pycache__

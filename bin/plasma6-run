@@ -16,6 +16,7 @@ args=(run --rm --name "${CONTAINER_NAME:-plasma6}" --user=0:0 --privileged --cgr
 	--pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777
 	-e "DISPLAY_MODE=$mode" -e "DISPLAY_BACKEND=$backend"
 	-e "DISPLAY_WIDTH=${DISPLAY_WIDTH:-1920}" -e "DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-1080}")
+args+=(-e "VNC_MAX_FPS=${VNC_MAX_FPS:-60}")
 if [[ $engine == podman ]]; then
 	# The inherited entrypoint is a shell script, so force systemd mount setup.
 	args+=(--systemd=always --passwd=false --health-cmd=/usr/local/bin/plasma-healthcheck

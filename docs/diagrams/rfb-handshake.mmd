@@ -1,0 +1,17 @@
+sequenceDiagram
+    participant C as RFB client
+    participant S as RFB server
+    S->>C: Protocol version greeting
+    C->>S: Select RFB 3.8
+    S->>C: Offered security types
+    C->>S: Select VNC authentication
+    S->>C: Random 16-byte challenge
+    C->>S: DES challenge response
+    S->>C: Authentication success
+    C->>S: Shared-session flag
+    S->>C: Size, pixel format, desktop name
+    C->>S: Request BGRX pixels and Raw encoding
+    C->>S: FramebufferUpdateRequest
+    S->>C: Rectangle headers and pixel bytes
+    C->>S: KeyEvent / PointerEvent
+    Note over C,S: Web mode carries these messages inside WebSocket frames

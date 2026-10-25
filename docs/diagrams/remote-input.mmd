@@ -1,0 +1,16 @@
+flowchart TD
+    client["Keyboard or mouse in VNC client / noVNC"]
+    proxy["websockify: web mode only"]
+    rfb["Authenticated RFB connection"]
+    backend{"Desktop backend"}
+    krfb["KRFB accepts KeyEvent / PointerEvent"]
+    plugin["kwin.so event plugin"]
+    protocol["Private KWin fake-input protocol v6"]
+    kwin["KWin routes input to window or desktop"]
+    x11["x11vnc injects input into private X server"]
+    app["Application handles click or text"]
+    client -->|"VNC TCP"| rfb
+    client -->|"web WebSocket"| proxy --> rfb
+    rfb --> backend
+    backend -->|wayland| krfb --> plugin --> protocol --> kwin --> app
+    backend -->|x11| x11 --> app

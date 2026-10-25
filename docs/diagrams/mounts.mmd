@@ -1,0 +1,24 @@
+flowchart LR
+    subgraph host["Host paths"]
+        wayland["Runtime Wayland socket"]
+        x11["/tmp/.X11-unix"]
+        cookie["Host Xauthority file"]
+        file["Host typed.txt: mode 0600"]
+    end
+    subgraph container["Container paths"]
+        hostwl["/run/host/wayland"]
+        hostx["/run/host/X11"]
+        hostcookie["/run/host/Xauthority"]
+        copy["/etc/plasma/host-Xauthority"]
+        alias["/tmp/.X11-unix/X0: host alias"]
+        privatex["/tmp/.X11-unix/X100: private X server"]
+        privatewl["/run/plasma: private Wayland, D-Bus, PipeWire"]
+        output["/e2e-output/typed.txt"]
+        env["/etc/plasma/session.env"]
+    end
+    wayland -->|"read-only bind"| hostwl
+    x11 -->|"read-only bind"| hostx
+    cookie -->|"read-only bind"| hostcookie
+    hostcookie -->|"private normalized copy"| copy
+    alias -. "symlink" .-> hostx
+    file <-->|"read-write bind: same file"| output
