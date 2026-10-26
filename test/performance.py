@@ -9,19 +9,22 @@ import base64
 import io
 import json
 import os
-from pathlib import Path
 import shutil
 import statistics
-import subprocess
 import time
 import traceback
+from pathlib import Path
 
 from PIL import Image, ImageChops
 from playwright.sync_api import sync_playwright
-
-
-def run(*arguments):
-    return subprocess.run(arguments, text=True, capture_output=True, timeout=180)
+from support import (
+    collect_artifacts,
+    launch,
+    renderer_command,
+    run,
+    software_options,
+    wait_ready,
+)
 
 
 def banner_box(image):
@@ -78,76 +81,24 @@ def main():
     runtime = options.runtime
     name = f"plasma6-performance-{os.getpid()}"
     report = {"settings": vars(options), "checks": {}}
-    args = [
-        runtime,
-        "run",
-        "-d",
-        "--name",
-        name,
-        "--privileged",
-        "--user=0:0",
-        "--cgroupns=private",
-        "--pids-limit=8192",
-        "--shm-size=512m",
-        "--tmpfs",
-        "/run",
-        "--tmpfs",
-        "/tmp:mode=1777",
-        "-e",
-        f"DISPLAY_BACKEND={options.backend}",
-        "-e",
-        "DISPLAY_MODE=web",
-        "-e",
-        f"DISPLAY_WIDTH={options.width}",
-        "-e",
-        f"DISPLAY_HEIGHT={options.height}",
-        "-e",
-        f"VNC_MAX_FPS={options.fps}",
-        "-e",
-        "VNC_PASSWORD=testpass",
-        "-e",
-        f"PLASMA_UID={os.getuid()}",
-        "-e",
-        f"PLASMA_GID={os.getgid()}",
-        "-p",
-        "127.0.0.1::6080",
-    ]
-    if runtime == "podman":
-        args += ["--systemd=always", "--passwd=false", "--userns=keep-id"]
-    else:
-        args += ["--userns=host"]
-    if options.no_gpu:
-        args += ["--tmpfs", "/dev/dri:mode=0755"]
-        if runtime == "podman":
-            # Privileged rootless Podman bind-mounts host devices after tmpfs.
-            # Keep systemd's capabilities without importing those GPU devices.
-            args.remove("--privileged")
-            args += ["--cap-add=all", "--security-opt=seccomp=unconfined"]
-            if Path("/dev/udmabuf").exists():
-                args += ["--device", "/dev/udmabuf"]
+    args = software_options(runtime) if options.no_gpu else []
     try:
-        result = run(*args, options.image)
+        result = launch(
+            runtime,
+            options.image,
+            name,
+            options.backend,
+            "web",
+            *args,
+            DISPLAY_WIDTH=str(options.width),
+            DISPLAY_HEIGHT=str(options.height),
+            VNC_MAX_FPS=str(options.fps),
+        )
         (artifacts / "run.log").write_text(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError(result.stderr)
-        deadline = time.monotonic() + 120
-        while run(runtime, "exec", name, "plasma-healthcheck").returncode:
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Desktop failed to become ready")
-            time.sleep(1)
-        renderer = run(
-            runtime,
-            "exec",
-            "--user=plasma",
-            name,
-            "env",
-            "XDG_RUNTIME_DIR=/run/plasma",
-            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/plasma/bus",
-            "qdbus-qt6",
-            "org.kde.KWin",
-            "/KWin",
-            "supportInformation",
-        )
+        wait_ready(runtime, name)
+        renderer = run(runtime, *renderer_command(name))
         (artifacts / "renderer.log").write_text(renderer.stdout + renderer.stderr)
         software = any(
             value in renderer.stdout.lower()
@@ -235,7 +186,7 @@ def main():
                     raise RuntimeError("Benchmark window did not appear")
                 time.sleep(0.25)
             before.save(artifacts / "01-before.png")
-            x, y, right, bottom = box
+            x, y, right, _bottom = box
             page.evaluate(
                 """({frame, feedback}) => {
                 const canvas = window.perfRfb._display._target;
@@ -347,33 +298,7 @@ def main():
         raise
     finally:
         (artifacts / "result.json").write_text(json.dumps(report, indent=2) + "\n")
-        for filename, arguments in [
-            ("container.log", ["logs", name]),
-            (
-                "vnc.log",
-                ["exec", name, "journalctl", "-b", "-u", "plasma-vnc", "--no-pager"],
-            ),
-            ("journal.log", ["exec", name, "journalctl", "-b", "--no-pager"]),
-            ("session.env", ["exec", name, "cat", "/etc/plasma/session.env"]),
-            (
-                "renderer.log",
-                [
-                    "exec",
-                    "--user=plasma",
-                    name,
-                    "env",
-                    "XDG_RUNTIME_DIR=/run/plasma",
-                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/plasma/bus",
-                    "qdbus-qt6",
-                    "org.kde.KWin",
-                    "/KWin",
-                    "supportInformation",
-                ],
-            ),
-        ]:
-            result = run(runtime, *arguments)
-            (artifacts / filename).write_text(result.stdout + result.stderr)
-        run(runtime, "rm", "-f", name)
+        collect_artifacts(runtime, name, artifacts, services=("vnc",))
         print(f"Artifacts: {artifacts}", flush=True)
 
 

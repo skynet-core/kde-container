@@ -2,11 +2,11 @@
 """Run inside a disposable image: exercise the actual inherited init framework."""
 
 import os
-from pathlib import Path
 import shlex
 import socket
 import subprocess
 import unittest
+from pathlib import Path
 
 BACKENDS = ("wayland", "x11") if Path("/usr/bin/kwin_x11").exists() else ("wayland",)
 
@@ -25,6 +25,7 @@ class InitTests(unittest.TestCase):
             env=environment,
             capture_output=True,
             text=True,
+            check=False,
         )
         self.assertEqual(result.returncode, expected, result.stderr)
         if expected:

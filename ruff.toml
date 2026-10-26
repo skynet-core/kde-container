@@ -1,0 +1,7 @@
+target-version = "py310"
+extend-include = [
+    "bin/plasma-healthcheck",
+    "libexec/plasma-remote-output",
+    "libexec/plasma-target-app",
+    "libexec/plasma-wait",
+]

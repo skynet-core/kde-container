@@ -7,13 +7,24 @@
 import argparse
 import json
 import os
-from pathlib import Path
 import shlex
+import struct
 import subprocess
 import time
 import traceback
+from pathlib import Path
 
+import websocket
 from rfb import RFBClient
+from support import (
+    available_backends,
+    collect_artifacts,
+    launch,
+    renderer_command,
+    run,
+    software_options,
+    wait_ready,
+)
 from ui import EXPECTED, banner_box
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Chromium kiosk test</title>
@@ -24,12 +35,6 @@ input{position:absolute;left:15%;top:40%;width:70%;height:60px;box-sizing:border
 <body><h1>Chromium kiosk test</h1><input autofocus aria-label="Kiosk input"><div id="status"></div>
 <script>document.querySelector('input').oninput=e=>document.querySelector('#status').style.background=
 e.target.value==='Kiosk AaZz 0123!?'?'rgb(35,180,95)':'rgb(90,90,90)';</script></body></html>"""
-
-
-def run(*arguments, **settings):
-    return subprocess.run(
-        arguments, text=True, capture_output=True, timeout=180, **settings
-    )
 
 
 def state(runtime, name):
@@ -88,17 +93,7 @@ def main():
     options = parser.parse_args()
     runtime = options.runtime
     if options.backends is None:
-        x11 = run(
-            runtime,
-            "run",
-            "--rm",
-            "--entrypoint",
-            "/usr/bin/test",
-            options.image,
-            "-x",
-            "/usr/bin/kwin_x11",
-        )
-        options.backends = ("wayland", "x11") if x11.returncode == 0 else ("wayland",)
+        options.backends = available_backends(runtime, options.image)
     root = Path(__file__).resolve().parents[1]
     artifacts = (
         root
@@ -131,43 +126,14 @@ def main():
                         ]
                     )
                 )
-                environment = {
-                    **os.environ,
-                    "RUNTIME": runtime,
-                    "IMAGE_TAG": options.image,
-                    "CONTAINER_NAME": name,
-                    "DISPLAY_BACKEND": backend,
-                    "DISPLAY_MODE": mode,
-                    "DISPLAY_WIDTH": "1024",
-                    "DISPLAY_HEIGHT": "768",
-                    "VNC_PASSWORD": "testpass",
-                    "VNC_PORT": "0",
-                    "WEB_PORT": "0",
-                    "TARGET_APP": target,
-                    "PLASMA_UID": str(os.getuid()),
-                    "PLASMA_GID": str(os.getgid()),
-                }
-                environment.pop("VNC_PASSWORD_FILE", None)
                 arguments = [
-                    str(root / "bin/plasma6-run"),
-                    "-d",
-                    "--rm=false",
-                    "--userns=keep-id" if runtime == "podman" else "--userns=host",
                     "--mount",
                     f"type=bind,source={output},target=/e2e-output/typed.txt",
                     "--mount",
                     f"type=bind,source={page},target=/kiosk-test/page.html,readonly",
                 ]
                 if options.no_gpu:
-                    arguments += ["--tmpfs", "/dev/dri:mode=0755"]
-                    if runtime == "podman":
-                        arguments += [
-                            "--privileged=false",
-                            "--cap-add=all",
-                            "--security-opt=seccomp=unconfined",
-                        ]
-                        if Path("/dev/udmabuf").exists():
-                            arguments += ["--device", "/dev/udmabuf"]
+                    arguments += software_options(runtime)
                 report = {
                     "app": app,
                     "backend": backend,
@@ -177,31 +143,20 @@ def main():
                 }
                 client = None
                 try:
-                    result = run(*arguments, env=environment)
+                    result = launch(
+                        runtime,
+                        options.image,
+                        name,
+                        backend,
+                        mode,
+                        *arguments,
+                        TARGET_APP=target,
+                    )
                     (case / "run.log").write_text(result.stdout + result.stderr)
                     if result.returncode:
                         raise RuntimeError(result.stderr)
-                    deadline = time.monotonic() + 90
-                    while run(runtime, "exec", name, "plasma-healthcheck").returncode:
-                        running = run(
-                            runtime, "inspect", "--format", "{{.State.Running}}", name
-                        ).stdout.strip()
-                        if running != "true" or time.monotonic() >= deadline:
-                            raise RuntimeError("Kiosk failed to become healthy")
-                        time.sleep(0.5)
-                    renderer = run(
-                        runtime,
-                        "exec",
-                        "--user=plasma",
-                        name,
-                        "env",
-                        "XDG_RUNTIME_DIR=/run/plasma",
-                        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/plasma/bus",
-                        "qdbus-qt6",
-                        "org.kde.KWin",
-                        "/KWin",
-                        "supportInformation",
-                    )
+                    wait_ready(runtime, name, timeout=90)
+                    renderer = run(runtime, *renderer_command(name))
                     (case / "renderer.log").write_text(
                         renderer.stdout + renderer.stderr
                     )
@@ -353,7 +308,15 @@ def main():
                     if not all(report["checks"].values()):
                         raise AssertionError(report["checks"])
                     print(f"PASS {label}: {report['checks']}", flush=True)
-                except Exception as error:
+                except (
+                    AssertionError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    subprocess.SubprocessError,
+                    struct.error,
+                    websocket.WebSocketException,
+                ) as error:
                     failures.append(label)
                     report["error"] = str(error)
                     (case / "failure.log").write_text(traceback.format_exc())
@@ -362,38 +325,12 @@ def main():
                     if client:
                         try:
                             client.close()
-                        except Exception:
-                            pass
+                        except (OSError, RuntimeError, websocket.WebSocketException):
+                            (case / "cleanup.log").write_text(traceback.format_exc())
                     (case / "result.json").write_text(
                         json.dumps(report, indent=2) + "\n"
                     )
-                    for filename, args in [
-                        ("container.log", ["logs", name]),
-                        (
-                            "journal.log",
-                            ["exec", name, "journalctl", "-b", "--no-pager"],
-                        ),
-                        (
-                            "session.log",
-                            [
-                                "exec",
-                                name,
-                                "journalctl",
-                                "-b",
-                                "-u",
-                                "plasma-session",
-                                "--no-pager",
-                            ],
-                        ),
-                        (
-                            "session.env",
-                            ["exec", name, "cat", "/etc/plasma/session.env"],
-                        ),
-                        ("processes.log", ["top", name]),
-                    ]:
-                        result = run(runtime, *args)
-                        (case / filename).write_text(result.stdout + result.stderr)
-                    run(runtime, "rm", "-f", name)
+                    collect_artifacts(runtime, name, case, services=("session",))
     print(f"Artifacts: {artifacts}", flush=True)
     if failures:
         raise SystemExit(f"Failed kiosk cases: {', '.join(failures)}")

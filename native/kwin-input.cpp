@@ -4,15 +4,29 @@
 #include "events.h"
 #include "eventsplugin.h"
 #include "fake-input-client.h"
+#include <rfb/rfbproto.h>
 
 #include <KPluginFactory>
 #include <QDebug>
 #include <QGuiApplication>
 #include <QHash>
+#include <QObject>
 #include <QSocketNotifier>
+#include <QVariant>
+#include <iterator>
+#include <qcontainerfwd.h>
+#include <qlogging.h>
+#include <qtenvironmentvariables.h>
+#include <qtmetamacros.h>
+#if __has_include(<qguiapplication_platform.h>)
+#include <qguiapplication_platform.h>
+#endif
+#include <cstdint>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <wayland-client.h>
+#include <wayland-client-core.h>
+#include <wayland-client-protocol.h>
+#include <wayland-util.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include <algorithm>
@@ -95,14 +109,17 @@ public:
     wl_display_flush(m_display);
   }
 
+  // KRFB fixes this callback's parameter order.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   void handlePointer(int buttonMask, int x, int y) override {
+    const auto buttonsState = static_cast<unsigned>(buttonMask);
     org_kde_kwin_fake_input_pointer_motion_absolute(
         m_input, wl_fixed_from_int(x), wl_fixed_from_int(y));
     // RFB: left, middle, right, wheel up/down/left/right, back, forward.
     static constexpr unsigned buttons[] = {272, 274, 273, 0, 0, 0, 0, 275, 276};
     for (unsigned bit = 0; bit < std::size(buttons); ++bit) {
-      const bool down = buttonMask & (1 << bit);
-      if (down == bool(m_buttons & (1 << bit))) {
+      const bool down = buttonsState & (1u << bit);
+      if (down == bool(m_buttons & (1u << bit))) {
         continue;
       }
       if (buttons[bit]) {
@@ -113,7 +130,7 @@ public:
                                      wl_fixed_from_int(direction));
       }
     }
-    m_buttons = buttonMask;
+    m_buttons = buttonsState;
     wl_display_flush(m_display);
   }
 
@@ -138,6 +155,8 @@ private:
     return XKB_KEYCODE_INVALID;
   }
 
+  // Wayland fixes this callback's parameter types and order.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   static void keymap(void *data, wl_keyboard *, uint32_t format, int32_t fd,
                      uint32_t size) {
     auto self = static_cast<KwinInput *>(data);
@@ -202,7 +221,7 @@ private:
   xkb_context *m_context = nullptr;
   xkb_keymap *m_keymap = nullptr;
   QHash<xkb_keysym_t, xkb_keycode_t> m_pressed;
-  int m_buttons = 0;
+  unsigned m_buttons = 0;
 };
 
 class KwinEventsPlugin final : public EventsPlugin {

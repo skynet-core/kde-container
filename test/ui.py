@@ -7,23 +7,29 @@
 import argparse
 import json
 import os
-from pathlib import Path
+import struct
 import subprocess
 import time
 import traceback
+from pathlib import Path
 
+import websocket
 from PIL import Image, ImageChops
-
 from rfb import RFBClient
+from support import (
+    available_backends,
+    collect_artifacts,
+    launch,
+    renderer_command,
+    run,
+    software_options,
+    wait_ready,
+)
 
 EXPECTED = (
     "Plasma VNC UI test\nMouse drag + keyboard: AaZz 0123456789!?\nSaved from the UI.\n"
 )
 BANNER = (18, 210, 178)
-
-
-def run(*args, **kwargs):
-    return subprocess.run(args, text=True, capture_output=True, timeout=180, **kwargs)
 
 
 def banner_box(image):
@@ -59,17 +65,7 @@ def main():
     options = parser.parse_args()
     runtime = options.runtime
     if options.backends is None:
-        x11 = run(
-            runtime,
-            "run",
-            "--rm",
-            "--entrypoint",
-            "/usr/bin/test",
-            options.image,
-            "-x",
-            "/usr/bin/kwin_x11",
-        )
-        options.backends = ("wayland", "x11") if x11.returncode == 0 else ("wayland",)
+        options.backends = available_backends(runtime, options.image)
     artifacts = (
         Path(__file__).resolve().parent
         / ".artifacts"
@@ -89,50 +85,11 @@ def main():
             name = f"plasma6-ui-{os.getpid()}-{label}"
             port = 5900 if mode == "vnc" else 6080
             args = [
-                runtime,
-                "run",
-                "-d",
-                "--name",
-                name,
-                "--privileged",
-                "--user=0:0",
-                "--cgroupns=private",
-                "--pids-limit=8192",
-                "--shm-size=512m",
-                "--tmpfs",
-                "/run",
-                "--tmpfs",
-                "/tmp:mode=1777",
-                "-e",
-                f"DISPLAY_BACKEND={backend}",
-                "-e",
-                f"DISPLAY_MODE={mode}",
-                "-e",
-                "DISPLAY_WIDTH=1280",
-                "-e",
-                "DISPLAY_HEIGHT=900",
-                "-e",
-                "VNC_PASSWORD=testpass",
-                "-e",
-                f"PLASMA_UID={os.getuid()}",
-                "-e",
-                f"PLASMA_GID={os.getgid()}",
                 "--mount",
                 f"type=bind,source={output},target=/e2e-output/typed.txt",
-                "-p",
-                f"127.0.0.1::{port}",
             ]
-            if runtime == "podman":
-                args += ["--systemd=always", "--passwd=false", "--userns=keep-id"]
-            else:
-                args += ["--userns=host"]
             if options.no_gpu:
-                args += ["--tmpfs", "/dev/dri:mode=0755"]
-                if runtime == "podman":
-                    args.remove("--privileged")
-                    args += ["--cap-add=all", "--security-opt=seccomp=unconfined"]
-                    if Path("/dev/udmabuf").exists():
-                        args += ["--device", "/dev/udmabuf"]
+                args += software_options(runtime)
             report = {
                 "backend": backend,
                 "mode": mode,
@@ -142,31 +99,21 @@ def main():
             }
             client = None
             try:
-                result = run(*args, options.image)
+                result = launch(
+                    runtime,
+                    options.image,
+                    name,
+                    backend,
+                    mode,
+                    *args,
+                    DISPLAY_WIDTH="1280",
+                    DISPLAY_HEIGHT="900",
+                )
                 (case / "run.log").write_text(result.stdout + result.stderr)
                 if result.returncode:
                     raise RuntimeError(result.stderr)
-                deadline = time.monotonic() + 120
-                while run(runtime, "exec", name, "plasma-healthcheck").returncode:
-                    state = run(
-                        runtime, "inspect", "--format", "{{.State.Running}}", name
-                    )
-                    if state.stdout.strip() != "true" or time.monotonic() >= deadline:
-                        raise RuntimeError("Desktop failed to become ready")
-                    time.sleep(1)
-                renderer = run(
-                    runtime,
-                    "exec",
-                    "--user=plasma",
-                    name,
-                    "env",
-                    "XDG_RUNTIME_DIR=/run/plasma",
-                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/plasma/bus",
-                    "qdbus-qt6",
-                    "org.kde.KWin",
-                    "/KWin",
-                    "supportInformation",
-                )
+                wait_ready(runtime, name)
+                renderer = run(runtime, *renderer_command(name))
                 (case / "renderer.log").write_text(renderer.stdout + renderer.stderr)
                 if options.no_gpu:
                     report["checks"]["software_renderer"] = (
@@ -262,7 +209,15 @@ def main():
                     f"PASS {label}: drag={actual}, typed and saved {len(EXPECTED)} characters to {output}",
                     flush=True,
                 )
-            except Exception as error:
+            except (
+                AssertionError,
+                OSError,
+                RuntimeError,
+                ValueError,
+                subprocess.SubprocessError,
+                struct.error,
+                websocket.WebSocketException,
+            ) as error:
                 failures.append(label)
                 report["error"] = str(error)
                 (case / "failure.log").write_text(traceback.format_exc())
@@ -271,30 +226,10 @@ def main():
                 if client:
                     try:
                         client.close()
-                    except Exception:
-                        pass
+                    except (OSError, RuntimeError, websocket.WebSocketException):
+                        (case / "cleanup.log").write_text(traceback.format_exc())
                 (case / "result.json").write_text(json.dumps(report, indent=2) + "\n")
-                for filename, arguments in [
-                    ("container.log", ["logs", name]),
-                    ("journal.log", ["exec", name, "journalctl", "-b", "--no-pager"]),
-                    (
-                        "vnc.log",
-                        [
-                            "exec",
-                            name,
-                            "journalctl",
-                            "-b",
-                            "-u",
-                            "plasma-vnc",
-                            "--no-pager",
-                        ],
-                    ),
-                    ("processes.log", ["top", name]),
-                    ("session.env", ["exec", name, "cat", "/etc/plasma/session.env"]),
-                ]:
-                    result = run(runtime, *arguments)
-                    (case / filename).write_text(result.stdout + result.stderr)
-                run(runtime, "rm", "-f", name)
+                collect_artifacts(runtime, name, case, services=("vnc",))
     print(f"Artifacts: {artifacts}", flush=True)
     if failures:
         raise SystemExit(f"Failed UI cases: {', '.join(failures)}")

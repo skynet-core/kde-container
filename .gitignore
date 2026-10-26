@@ -1,7 +1,13 @@
 test/.artifacts/
 __pycache__/
-/build/CMakeCache.txt
-/build/CMakeFiles/
-/build/.cmake/
+/build/*
+!/build/collect-artifacts
+!/build/create-user
+!/build/install-packages
+!/build/normalize-runtime
+!/build/packages/
+!/build/render-dockerfiles.py
+!/build/websockify-requirements.txt
 vnc-password
 .vscode/
+.ruff_cache/

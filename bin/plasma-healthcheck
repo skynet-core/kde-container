@@ -29,21 +29,21 @@ def desktop_probe(command):
     )
 
 
-subprocess.run(
-    [
-        "systemctl",
-        "is-active",
-        "--quiet",
-        f"plasma-{environment['DISPLAY_BACKEND']}-{environment['DISPLAY_MODE']}.target",
-        "plasma-session.service",
-    ],
-    check=True,
-)
+units = [
+    f"plasma-{environment['DISPLAY_BACKEND']}-{environment['DISPLAY_MODE']}.target",
+    "plasma-session.service",
+]
 probes = ["desktop"]
 if environment["DISPLAY_MODE"] in ("vnc", "web"):
+    units.append("plasma-vnc.service")
     probes.append("vnc")
-    desktop_probe(["/usr/local/libexec/plasma-remote-output", "--check"])
 if environment["DISPLAY_MODE"] == "web":
+    units.append("plasma-web.service")
     probes.append("web")
+for unit in units:
+    # is-active with multiple units succeeds when any one of them is active.
+    subprocess.run(["systemctl", "is-active", "--quiet", unit], check=True)
+if environment["DISPLAY_MODE"] in ("vnc", "web"):
+    desktop_probe(["/usr/local/libexec/plasma-remote-output", "--check"])
 for probe in probes:
     desktop_probe(["/usr/local/libexec/plasma-wait", probe])

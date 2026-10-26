@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Test-only animation and keyboard acknowledgement, observed through noVNC.
 #include <QApplication>
+#include <QColor>
 #include <QKeyEvent>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QTimer>
 #include <QWidget>
+#include <qnamespace.h>
 
 class BenchmarkWindow final : public QWidget {
 public:
@@ -23,8 +25,9 @@ public:
 
 protected:
   static QColor marker(unsigned value) {
-    return QColor(48 + 64 * (value & 3), 48 + 64 * ((value >> 2) & 3),
-                  48 + 64 * ((value >> 4) & 3));
+    return QColor(48 + 64 * static_cast<int>(value & 3u),
+                  48 + 64 * static_cast<int>((value >> 2u) & 3u),
+                  48 + 64 * static_cast<int>((value >> 4u) & 3u));
   }
 
   void paintEvent(QPaintEvent *) override {

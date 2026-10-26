@@ -3,13 +3,13 @@
 
 import json
 import os
-from pathlib import Path
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 STATE = Path("/run/plasma/target-app.json")
 
@@ -79,6 +79,7 @@ def main():
             ["/usr/local/libexec/plasma-remote-output", "--check"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            check=False,
         ).returncode:
             if time.monotonic() >= deadline:
                 raise RuntimeError("Kiosk output did not become ready")
@@ -123,20 +124,14 @@ def main():
             while child.poll() is None and not stopping:
                 time.sleep(0.1)
             if stopping:
-                try:
-                    child.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    signal_group(child, signal.SIGKILL)
-                    child.wait()
-            else:
-                print(
-                    f"Kiosk application exited ({child.returncode}); restarting",
-                    flush=True,
-                )
+                break
+            print(
+                f"Kiosk application exited ({child.returncode}); restarting",
+                flush=True,
+            )
             signal_group(child, signal.SIGTERM)
             STATE.unlink(missing_ok=True)
-            if not stopping:
-                time.sleep(2)
+            time.sleep(2)
     finally:
         if child is not None and child.poll() is None:
             signal_group(child, signal.SIGTERM)

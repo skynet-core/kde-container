@@ -9,8 +9,8 @@ source of truth for behavior; the tables describe their current roles.
 
 ```text
 .
-├── Dockerfile                     Build stages and image defaults
-├── Dockerfile.<distro>            Generated distribution-specific builds
+├── Dockerfile.fedora-44           Maintained Fedora image and build template
+├── Dockerfile.<distro>            Generated Debian, Ubuntu and Arch builds
 ├── build/                         Package lists, build helpers and generator
 ├── .github/workflows/             Build, GUI validation and GHCR publication
 ├── .dockerignore                  Files admitted to the build context
@@ -29,8 +29,8 @@ source of truth for behavior; the tables describe their current roles.
 
 | File | Responsibility |
 | --- | --- |
-| [Dockerfile](../Dockerfile) | Build packages/assets/plugin; assemble production and test targets |
-| [Dockerfile generator](../build/render-dockerfiles.py) | Generate the four explicit distro Dockerfiles; `--check` rejects drift |
+| [Dockerfile.fedora-44](../Dockerfile.fedora-44) | Maintained template; build Fedora production and test targets |
+| [Dockerfile generator](../build/render-dockerfiles.py) | Generate Debian, Ubuntu and Arch Dockerfiles from Fedora; `--check` rejects drift |
 | [Distribution package lists](../build/packages/) | Separate runtime/browser/input/capture dependencies for each package manager |
 | [Publishing workflow](../.github/workflows/build-and-publish.yml) | Test AMD64 distro images, retain evidence and publish tested production tags to GHCR |
 | [.dockerignore](../.dockerignore) | Exclude unneeded context, including test artifacts and documentation assets |
@@ -84,6 +84,9 @@ local files in this checkout.
 | [krfb-existing-output.patch](../patches/krfb-existing-output.patch) | Stream Debian's existing virtual monitor through PipeWire, retaining GPU rendering |
 | [xtest-paced.cpp](../compat/xtest-paced.cpp) | Scoped software-path XTest keyboard compatibility library |
 | [test.sh](../test/test.sh) | Run static, init, unit-definition and boot checks |
+| [lint.sh](../test/lint.sh) | Run the source linters and formatting checks |
+| [unit.py](../test/unit.py) | Host regressions for launcher arguments, shared helpers and kiosk process cleanup |
+| [support.py](../test/support.py) | Shared host launcher setup, backend detection, readiness, software-device options and retained logs |
 | [check-init.py](../test/check-init.py) | Test the real inherited init framework inside a disposable image instance |
 | [integration.py](../test/integration.py) | Start the mode matrix through the host launcher and preserve evidence |
 | [rfb.py](../test/rfb.py) | Shared RFB client with authentication, screenshots and input events |

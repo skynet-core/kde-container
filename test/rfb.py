@@ -4,9 +4,9 @@ import socket
 import struct
 import time
 
+import websocket
 from Crypto.Cipher import DES
 from PIL import Image
-import websocket
 
 
 class RFBClient:

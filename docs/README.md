@@ -61,7 +61,7 @@ For example:
 # -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless
 
 # HOST: build the project into Docker's image store.
-docker build -t plasma6:local .
+docker build -f Dockerfile.fedora-44 -t plasma6:local .
 
 # HOST: inspect the resulting image's entrypoint and default command.
 docker image inspect plasma6:local --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}'

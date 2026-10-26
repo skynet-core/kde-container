@@ -11,7 +11,7 @@ variable at startup does not reinstall the desktop.
 
 | Phase | Examples | Where to read the implementation |
 | --- | --- | --- |
-| Build | Install distribution packages, download noVNC, compile `kwin.so` | [Dockerfile](../Dockerfile), [native CMake project](../native/CMakeLists.txt) |
+| Build | Install distribution packages, download noVNC, compile `kwin.so` | [Dockerfile.fedora-44](../Dockerfile.fedora-44), [native CMake project](../native/CMakeLists.txt) |
 | Startup before systemd | Adjust account IDs, detect sockets, write environment and target link | [init modules](../init.d/modules/) |
 | Runtime under systemd | Start KWin, D-Bus, the display server and remote services | [system units](../systemd/system/), [helpers](../libexec/) |
 | Host validation | Check modes, manipulate windows, read host output | [tests](../test/) |
@@ -34,7 +34,7 @@ ENV DISPLAY_MODE=headless
 ```bash
 # HOST: build an image with its account initially set to UID/GID 2000.
 # This is optional; normal use can set the account at container startup instead.
-docker build --build-arg PLASMA_UID=2000 --build-arg PLASMA_GID=2000 -t plasma6:custom .
+docker build -f Dockerfile.fedora-44 --build-arg PLASMA_UID=2000 --build-arg PLASMA_GID=2000 -t plasma6:custom .
 
 # Runtime options for a full run command would be:
 # -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)"
@@ -72,18 +72,20 @@ files without making the build stage the final runtime filesystem.
 | `ui-perf-baseline` | `input-runtime` plus the animation benchmark | Compare performance with original KRFB while keeping input working |
 
 A production build does not copy the test editor or the compiler toolchain from
-`input-build` into its final filesystem. Docker describes this artifact-selection
+`input-build` into its final filesystem. It also removes `/build-support` and
+keeps the host launcher in the checkout instead of copying it into the image.
+Docker describes this artifact-selection
 technique in its [multi-stage build guide](https://docs.docker.com/build/building/multi-stage/).
 
 ```bash
 # HOST: build the default production stage.
-docker build -t plasma6:local .
+docker build -f Dockerfile.fedora-44 -t plasma6:local .
 
 # HOST: stop at the explicitly named test stage and give it a different tag.
-docker build --target ui-test -t plasma6:ui-test .
+docker build -f Dockerfile.fedora-44 --target ui-test -t plasma6:ui-test .
 
 # HOST: build into Podman's image store, retaining Docker-format health metadata.
-podman build --format docker --layers -t plasma6:local .
+podman build -f Dockerfile.fedora-44 --format docker --layers -t plasma6:local .
 ```
 
 A tag is a convenient name, not a cryptographic identity. Inspect the image ID when
@@ -122,7 +124,7 @@ zero fuzz so source drift fails the build instead of silently changing its meani
 
 ```bash
 # HOST: inspect the pinned source versions and checksum defaults in this checkout.
-rg 'ARG (NOVNC|KRFB_SOURCE)' Dockerfile
+rg 'ARG (NOVNC|KRFB_SOURCE)' Dockerfile.fedora-44
 
 # General checksum pattern, shown as a teaching example:
 # echo 'EXPECTED_SHA256  archive.tar.gz' | sha256sum --check -
@@ -137,9 +139,10 @@ IDs and package versions when reproducing a test result.
 ## Distribution variants and publication
 
 The four explicit Dockerfiles match all four published systemd bases: Fedora 44,
-Debian 13, Ubuntu 26.04 and rolling Arch. The unqualified `Dockerfile` remains the
-Fedora default. [`build/render-dockerfiles.py`](../build/render-dockerfiles.py)
-generates the named files from it; CI uses `--check` to reject drift.
+Debian 13, Ubuntu 26.04 and rolling Arch. `Dockerfile.fedora-44` is the maintained
+template. [`build/render-dockerfiles.py`](../build/render-dockerfiles.py) generates
+the other three Dockerfiles from it; CI uses `--check` to reject drift. Every build
+selects its distribution with `-f`; there is no unqualified `Dockerfile`.
 
 ```bash
 # HOST: select the distribution through its Dockerfile, rather than substituting
@@ -153,8 +156,10 @@ python3 build/render-dockerfiles.py --check
 ```
 
 [`install-packages`](../build/install-packages) selects DNF, APT or pacman from
-`/etc/os-release`. Each family has separate `desktop.txt`, `browser.txt`,
-`input-build.txt` and `vnc-build.txt` lists. Only a stage's relevant list is copied
+`/etc/os-release`. Package lists separate desktop, browser, input build and capture
+build dependencies. Ubuntu and Debian share the identical development lists in
+`build/packages/debian/`; Ubuntu keeps its own desktop, browser and session lists.
+Only a stage's relevant list is copied
 before installation, so changing a compiler dependency does not invalidate the
 desktop package cache. Ubuntu also has a `session.txt` list for its separately
 packaged `plasma-session-x11` launcher. Arch uses a complete `pacman -Syu` update to avoid partial
@@ -578,6 +583,12 @@ objects, methods and signals in more detail.
 A process can have successfully executed while its socket, desktop or exported
 monitor is still initializing. The project therefore combines service lifecycle
 management with bounded readiness probes.
+
+The health checker first requires the selected target, desktop session and each
+enabled remote service to be active. It queries units individually: a
+[multi-unit `systemctl is-active` call](https://www.freedesktop.org/software/systemd/man/251/systemctl.html)
+succeeds when any listed unit is active, which can report success while the remote
+service is still starting.
 
 | Probe | What it actually checks |
 | --- | --- |

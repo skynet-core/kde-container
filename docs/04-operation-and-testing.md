@@ -39,7 +39,7 @@ engine's official setup instructions for your distribution.
 
 ```bash
 # HOST: build the default final stage and name it plasma6:local.
-docker build -t plasma6:local .
+docker build -f Dockerfile.fedora-44 -t plasma6:local .
 ```
 
 The initial build downloads packages and compiles the plugin. Later builds can
@@ -287,13 +287,13 @@ platform, and X11 cases launch it with XCB.
 
 ```bash
 # HOST: package the test editor alongside the production runtime.
-docker build --target ui-test -t plasma6:ui-test .
+docker build -f Dockerfile.fedora-44 --target ui-test -t plasma6:ui-test .
 
 # HOST: run four cases: Wayland/X11, each over VNC and the web proxy.
 uv run test/ui.py --runtime docker --image plasma6:ui-test
 
 # HOST: repeat against a native Podman build.
-podman build --format docker --layers --target ui-test -t plasma6:ui-test .
+podman build -f Dockerfile.fedora-44 --format docker --layers --target ui-test -t plasma6:ui-test .
 uv run test/ui.py --runtime podman --image plasma6:ui-test
 ```
 
@@ -399,7 +399,7 @@ keeps stock KRFB and the same Qt editor without the KWin input plugin.
 
 ```bash
 # HOST: build the intentionally unfixed test target.
-docker build --target ui-baseline -t plasma6:ui-baseline .
+docker build -f Dockerfile.fedora-44 --target ui-baseline -t plasma6:ui-baseline .
 
 # HOST: this is expected to fail its drag and text-save assertions on Wayland.
 uv run test/ui.py --image plasma6:ui-baseline --backends wayland --modes vnc
@@ -432,7 +432,7 @@ when that changed pixel comes back through capture, VNC and noVNC's canvas.
 
 ```bash
 # HOST: compile the test-only animation program into the UI image.
-docker build --target ui-test -t plasma6:ui-test .
+docker build -f Dockerfile.fedora-44 --target ui-test -t plasma6:ui-test .
 
 # HOST: verify GPU rendering and measure local 1920x1080 browser feedback.
 uv run test/performance.py --image plasma6:ui-test --expect-renderer gpu
@@ -441,7 +441,7 @@ uv run test/performance.py --image plasma6:ui-test --expect-renderer gpu
 uv run test/performance.py --image plasma6:ui-test --no-gpu --expect-renderer software --min-fps 20
 
 # HOST: compare against stock KRFB while retaining functioning input.
-docker build --target ui-perf-baseline -t plasma6:perf-before .
+docker build -f Dockerfile.fedora-44 --target ui-perf-baseline -t plasma6:perf-before .
 uv run test/performance.py --image plasma6:perf-before --measure-only
 ```
 
@@ -482,14 +482,14 @@ running Plasma desktop.
 
 ```bash
 # HOST: test images include the editor; production includes Chromium only.
-docker build --target ui-test -t plasma6:ui-test .
+docker build -f Dockerfile.fedora-44 --target ui-test -t plasma6:ui-test .
 uv run test/kiosk.py --image plasma6:ui-test
 
 # HOST: test the same application startup through software-only remote capture.
 uv run test/kiosk.py --image plasma6:ui-test --no-gpu --backends wayland --modes vnc web
 
 # HOST: build into the rootless engine's store, then run its full matrix.
-podman build --format docker --layers --target ui-test -t plasma6:ui-test .
+podman build -f Dockerfile.fedora-44 --format docker --layers --target ui-test -t plasma6:ui-test .
 uv run test/kiosk.py --runtime podman --image plasma6:ui-test
 ```
 

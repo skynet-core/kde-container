@@ -22,7 +22,12 @@ if [[ $engine == podman ]]; then
 	# The inherited entrypoint is a shell script, so force systemd mount setup.
 	args+=(--systemd=always --passwd=false --userns=keep-id --health-cmd=/usr/local/bin/plasma-healthcheck
 		--health-interval=10s --health-timeout=5s --health-start-period=90s --health-retries=6)
+fi
+if [[ $engine == podman || $mode == nested ]]; then
 	args+=(-e "PLASMA_UID=${PLASMA_UID:-$(id -u)}" -e "PLASMA_GID=${PLASMA_GID:-$(id -g)}")
+else
+	if [[ -n ${PLASMA_UID:-} ]]; then args+=(-e "PLASMA_UID=$PLASMA_UID"); fi
+	if [[ -n ${PLASMA_GID:-} ]]; then args+=(-e "PLASMA_GID=$PLASMA_GID"); fi
 fi
 
 if [[ $mode == nested ]]; then
@@ -34,7 +39,6 @@ if [[ $mode == nested ]]; then
 	esac
 	if [[ $engine == docker ]]; then
 		args+=(--userns=host)
-		args+=(-e "PLASMA_UID=${PLASMA_UID:-$(id -u)}" -e "PLASMA_GID=${PLASMA_GID:-$(id -g)}")
 	fi
 	wayland_socket=${WAYLAND_DISPLAY:-}
 	if [[ -n $wayland_socket && $wayland_socket != /* ]]; then
@@ -65,11 +69,6 @@ if [[ $mode == nested ]]; then
 	fi
 fi
 
-if [[ $mode != nested && $engine != podman ]]; then
-	if [[ -n ${PLASMA_UID:-} ]]; then args+=(-e "PLASMA_UID=$PLASMA_UID"); fi
-	if [[ -n ${PLASMA_GID:-} ]]; then args+=(-e "PLASMA_GID=$PLASMA_GID"); fi
-fi
-
 if [[ $mode == vnc || $mode == web ]]; then
 	if [[ -n ${VNC_PASSWORD_FILE:-} ]]; then
 		password_file=$(realpath "$VNC_PASSWORD_FILE")
@@ -80,14 +79,9 @@ if [[ $mode == vnc || $mode == web ]]; then
 		export VNC_PASSWORD
 		args+=(-e VNC_PASSWORD)
 	fi
-	if [[ $mode == web ]]; then
-		port=${WEB_PORT:-6080}
-		[[ $port != 0 ]] || port=''
-		args+=(-p "${BIND_ADDRESS:-127.0.0.1}:$port:6080")
-	else
-		port=${VNC_PORT:-5900}
-		[[ $port != 0 ]] || port=''
-		args+=(-p "${BIND_ADDRESS:-127.0.0.1}:$port:5900")
-	fi
+	container_port=5900 port=${VNC_PORT:-5900}
+	if [[ $mode == web ]]; then container_port=6080 port=${WEB_PORT:-6080}; fi
+	[[ $port != 0 ]] || port=''
+	args+=(-p "${BIND_ADDRESS:-127.0.0.1}:$port:$container_port")
 fi
 exec "$runtime" "${args[@]}" "$@" "$image"

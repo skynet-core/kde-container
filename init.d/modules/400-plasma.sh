@@ -121,17 +121,15 @@ PY
 	install -d /etc/plasma /tmp/.X11-unix
 	chmod 1777 /tmp/.X11-unix
 	# Copy host cookies without binding them to the host's hostname.
-	if [[ -n $host_x11 ]]; then
-		if [[ -n $host_xauthority && -r $host_xauthority ]]; then
-			# Hostname-scoped host cookies must also match the container hostname.
-			rm -f /etc/plasma/host-Xauthority
-			touch /etc/plasma/host-Xauthority
-			xauth -f "$host_xauthority" nlist | sed 's/^..../ffff/' |
-				xauth -f /etc/plasma/host-Xauthority nmerge -
-			chown plasma: /etc/plasma/host-Xauthority
-			chmod 600 /etc/plasma/host-Xauthority
-			host_xauthority=/etc/plasma/host-Xauthority
-		fi
+	if [[ -n $host_x11 && -n $host_xauthority && -r $host_xauthority ]]; then
+		# Hostname-scoped host cookies must also match the container hostname.
+		rm -f /etc/plasma/host-Xauthority
+		touch /etc/plasma/host-Xauthority
+		xauth -f "$host_xauthority" nlist | sed 's/^..../ffff/' |
+			xauth -f /etc/plasma/host-Xauthority nmerge -
+		chown plasma: /etc/plasma/host-Xauthority
+		chmod 600 /etc/plasma/host-Xauthority
+		host_xauthority=/etc/plasma/host-Xauthority
 	fi
 	local desktop_display=:100
 	[[ $host_x11 != :100 ]] || desktop_display=:101

@@ -305,9 +305,9 @@ pixel byte layout negotiated for framebuffer data.
 # A teaching example following the test client's PointerEvent layout.
 import struct
 
-message_type = 5       # RFB PointerEvent.
-buttons = 1            # Bit 0 means the left button is held.
-x, y = 400, 250        # Absolute coordinates in the exported framebuffer.
+message_type = 5  # RFB PointerEvent.
+buttons = 1  # Bit 0 means the left button is held.
+x, y = 400, 250  # Absolute coordinates in the exported framebuffer.
 packet = struct.pack(">BBHH", message_type, buttons, x, y)
 # >  : big-endian fields
 # B  : one unsigned byte, used for message type and button mask

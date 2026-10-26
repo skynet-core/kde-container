@@ -1,5 +1,4 @@
 *
-!Dockerfile
 !Dockerfile.*
 !build/
 !build/install-packages
@@ -12,7 +11,7 @@
 !init.d/
 !init.d/**
 !bin/
-!bin/**
+!bin/plasma-healthcheck
 !libexec/
 !libexec/**
 !systemd/

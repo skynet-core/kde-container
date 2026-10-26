@@ -6,7 +6,7 @@ The guide covers Linux containers, image builds, boot and systemd, all display
 paths, remote input, UID mapping, troubleshooting, and the UI regression tests.
 
 Plasma 6 desktops on every distribution image from
-[`skynet-core/systemd`](https://github.com/skynet-core/systemd), with Fedora 44 as the default.
+[`skynet-core/systemd`](https://github.com/skynet-core/systemd), with Fedora 44 as the maintained build template.
 Systemd runs as PID 1; the desktop, private D-Bus and remote-access services run as
 `plasma`. Docker with a rootful daemon and rootless Podman on Linux/cgroup v2 are
 supported. The commands below run containers directly, without a host launcher.
@@ -17,13 +17,17 @@ supported. The commands below run containers directly, without a host launcher.
 
 | Dockerfile | Systemd base tag | Desktop backends |
 | --- | --- | --- |
-| `Dockerfile` / `Dockerfile.fedora-44` | `fedora-44` | Wayland and X11 |
+| `Dockerfile.fedora-44` | `fedora-44` | Wayland and X11 |
 | `Dockerfile.debian-13` | `debian-13` | Wayland and X11 |
 | `Dockerfile.ubuntu-26.04` | `ubuntu-26.04` | Wayland and X11 |
 | `Dockerfile.archlinux` | `archlinux` | Wayland only; current rolling Arch has removed the Plasma X11 session |
 
 Each base is `ghcr.io/skynet-core/systemd:<tag>`. All variants share the same init
 modules, services, GPU preference, remote input fixes and optional kiosk session.
+
+Always select a Dockerfile with `-f Dockerfile.<distro>`. The maintained template
+is `Dockerfile.fedora-44`; the Debian, Ubuntu and Arch Dockerfiles are generated
+from it. There is no unqualified `Dockerfile`.
 
 ### Build with Docker
 
@@ -52,8 +56,8 @@ podman build --format docker --layers -f Dockerfile.archlinux -t plasma6:archlin
 ```
 
 Choose the distribution you want to run. Each run example below uses its explicit
-`plasma6:<distro>` tag. The unqualified Dockerfile still builds Fedora; to keep
-the default image name used by the optional launcher:
+`plasma6:<distro>` tag. To give the Fedora image the default image name used by
+the optional launcher:
 
 ```bash
 docker tag plasma6:fedora-44 plasma6:local
@@ -129,7 +133,7 @@ podman tag ghcr.io/skynet-core/kde-container:archlinux plasma6:archlinux
 ```
 
 ```bash
-# Maintainers: edit Dockerfile and build/packages/<family>/*.txt, then regenerate.
+# Maintainers: edit Dockerfile.fedora-44 and build/packages/<family>/*.txt, then regenerate.
 python3 build/render-dockerfiles.py
 python3 build/render-dockerfiles.py --check
 ```
@@ -1472,7 +1476,7 @@ container's configured environment.
 | `INIT_LOG_LEVEL` | inherited (`2`) | Base framework logging level |
 
 Build arguments: `BASE_IMAGE=ghcr.io/skynet-core/systemd:<distro>` (matching
-the selected Dockerfile; Fedora 44 for the unqualified file),
+the selected distribution Dockerfile),
 `PLASMA_UID=1000`, `PLASMA_GID=1000`, `NOVNC_VERSION=1.7.0`, `NOVNC_SHA256`,
 `KRFB_SOURCE_VERSION=26.08.1`, `KRFB_SOURCE_SHA256`. For a locally built base,
 use the matching Dockerfile and base tag, for example
@@ -1575,7 +1579,66 @@ Quality and Compression controls tune image quality and encoding cost; higher
 compression uses more server CPU. Settings are also accepted in the browser URL,
 for example `http://127.0.0.1:6080/vnc.html?quality=6&compression=1`.
 
+## Linting
+
+Run the complete source checks with:
+
+```bash
+./test/lint.sh
+```
+
+Install ShellCheck, Ruff, Hadolint, actionlint, clang-format, clangd, clang-tidy,
+`xmllint`, Git and ripgrep on the host. The native checks also need CMake, a C/C++
+compiler, Qt 6 Widgets, KF6 CoreAddons, Wayland development tools, LibVNCServer,
+xkbcommon and the KRFB private library. The distribution-specific development
+package lists are in `build/packages/*/input-build.txt`; install `krfb` as well.
+The Wayland development tools supply `/usr/share/wayland/wayland.dtd` for XML
+validation.
+
+Configure and build the native code once before linting. KRFB's public package
+does not include the private plugin headers, so download the same verified source
+archive used by the Dockerfiles:
+
+```bash
+mkdir -p test/.artifacts/lint/krfb-source
+curl --fail --location --retry 3 \
+  https://codeload.github.com/KDE/krfb/tar.gz/refs/tags/v26.08.1 \
+  --output test/.artifacts/lint/krfb.tar.gz
+printf '%s  %s\n' \
+  fb2e89fb9defdf5d3acd1cac172863b0adc45793961210c152ef3872fb875f5d \
+  test/.artifacts/lint/krfb.tar.gz | sha256sum --check -
+tar -xzf test/.artifacts/lint/krfb.tar.gz --strip-components=1 \
+  -C test/.artifacts/lint/krfb-source
+cmake -S native -B build \
+  -DKRFB_SOURCE_DIR="$PWD/test/.artifacts/lint/krfb-source"
+cmake --build build --parallel
+./test/lint.sh
+```
+
+CMake exports `build/compile_commands.json`; `.clangd` uses it for the same include
+paths and compiler flags in the editor. Rebuild after changing the native code or
+Wayland XML. If KRFB's private library is outside the normal library search paths,
+add `-DKRFB_PRIVATE=/absolute/path/to/libkrfbprivate.so.5` to the configure command.
+
+The checks cover shell scripts, Python scripts (including executable files without
+`.py` suffixes), Dockerfiles, GitHub Actions, C++ formatting and diagnostics,
+Wayland XML, SVG and JSON. Ruff also checks and formats Python examples in Markdown.
+Clangd logs remain in `test/.artifacts/lint/`. Generated build files and downloaded
+dependencies are excluded. The few API-mandated C++ parameter warnings and the
+root systemd Dockerfile policy have individual comments explaining their scope.
+
 ## Validation
+
+Run the host regression checks without building an image:
+
+```bash
+python3 test/unit.py
+```
+
+These check launcher namespaces, nested socket mounts, test isolation, readiness
+failures, retained diagnostics and kiosk shutdown/restart cleanup. The container
+suites share their setup and evidence collection through `test/support.py` and
+use `bin/plasma6-run` for engine flags and display mounts.
 
 Run production-image init, systemd, boot and framebuffer checks for the
 distribution you built. These suites use the optional host launcher internally
@@ -1735,7 +1798,7 @@ baseline target in the selected engine:
 uv run test/performance.py --runtime "$RUNTIME" --image plasma6:perf-before --measure-only
 ```
 
-To reproduce the original Wayland failure, build `--target ui-baseline` and run
+To reproduce the original Wayland failure, build with `-f Dockerfile.fedora-44 --target ui-baseline` and run
 `test/ui.py --image plasma6:ui-baseline --backends wayland --modes vnc`. That target
 contains the test editor and stock KRFB without the KWin input plugin; the drag and
 text-save assertions are expected to fail.
@@ -1747,6 +1810,9 @@ mapping on hosts with different caller IDs.
 ## Optional host launcher
 
 `bin/plasma6-run` is a convenience alternative to the direct commands above:
+
+Run it from the host checkout; it is excluded from the container image. Runtime
+images keep `plasma-healthcheck` and omit the package-installation build helpers.
 
 ```bash
 # Docker nested desktop: choose the image you built.

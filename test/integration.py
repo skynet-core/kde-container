@@ -3,13 +3,12 @@
 
 import argparse
 import os
-from pathlib import Path
 import subprocess
 import time
+from pathlib import Path
 
-
-def command(*args, **kwargs):
-    return subprocess.run(args, text=True, capture_output=True, **kwargs)
+from support import available_backends, collect_artifacts, wait_ready
+from support import run as command
 
 
 def main():
@@ -47,17 +46,7 @@ def main():
     failed = []
     backends = options.backends
     if backends is None:
-        x11 = command(
-            runtime,
-            "run",
-            "--rm",
-            "--entrypoint",
-            "/usr/bin/test",
-            options.image,
-            "-x",
-            "/usr/bin/kwin_x11",
-        )
-        backends = ("wayland", "x11") if x11.returncode == 0 else ("wayland",)
+        backends = available_backends(runtime, options.image)
     for backend in backends:
         for mode in options.modes:
             if mode == "nested" and options.skip_nested:
@@ -90,24 +79,7 @@ def main():
                 (case / "run.log").write_text(result.stdout + result.stderr)
                 if result.returncode:
                     raise RuntimeError(result.stderr)
-                deadline = time.monotonic() + 120
-                while True:
-                    check = command(runtime, "exec", name, "plasma-healthcheck")
-                    if check.returncode == 0:
-                        break
-                    state = command(
-                        runtime, "inspect", "--format", "{{.State.Running}}", name
-                    )
-                    if state.stdout.strip() != "true":
-                        logs = command(runtime, "logs", name)
-                        raise RuntimeError(
-                            "Container exited before desktop readiness: "
-                            + logs.stdout
-                            + logs.stderr
-                        )
-                    if time.monotonic() > deadline:
-                        raise RuntimeError(check.stdout + check.stderr)
-                    time.sleep(2)
+                wait_ready(runtime, name)
                 # Assert both the selected default target and absence of remote listeners in local modes.
                 target = command(
                     runtime,
@@ -183,29 +155,39 @@ def main():
                     if result.returncode:
                         raise RuntimeError(result.stdout + result.stderr)
                 print(f"PASS {label}", flush=True)
-            except (RuntimeError, AssertionError) as error:
+            except (
+                RuntimeError,
+                AssertionError,
+                OSError,
+                subprocess.SubprocessError,
+            ) as error:
                 failed.append(label)
                 (case / "failure.log").write_text(str(error))
                 print(f"FAIL {label}: {error}", flush=True)
             finally:
-                for filename, arguments in [
-                    ("container.log", ["logs", name]),
-                    ("journal.log", ["exec", name, "journalctl", "--no-pager", "-b"]),
-                    (
-                        "units.log",
-                        ["exec", name, "systemctl", "--no-pager", "--all", "--failed"],
-                    ),
-                    ("identity.log", ["exec", name, "id", "plasma"]),
-                    (
-                        "uid-map.log",
-                        ["exec", name, "cat", "/proc/1/uid_map", "/proc/1/gid_map"],
-                    ),
-                    ("session.env", ["exec", name, "cat", "/etc/plasma/session.env"]),
-                    ("processes.log", ["top", name]),
-                ]:
-                    result = command(runtime, *arguments)
-                    (case / filename).write_text(result.stdout + result.stderr)
-                command(runtime, "rm", "-f", name)
+                collect_artifacts(
+                    runtime,
+                    name,
+                    case,
+                    extra=[
+                        (
+                            "units.log",
+                            [
+                                "exec",
+                                name,
+                                "systemctl",
+                                "--no-pager",
+                                "--all",
+                                "--failed",
+                            ],
+                        ),
+                        ("identity.log", ["exec", name, "id", "plasma"]),
+                        (
+                            "uid-map.log",
+                            ["exec", name, "cat", "/proc/1/uid_map", "/proc/1/gid_map"],
+                        ),
+                    ],
+                )
     print(f"Artifacts: {artifacts}", flush=True)
     if failed:
         raise SystemExit(f"Failed: {', '.join(failed)}")

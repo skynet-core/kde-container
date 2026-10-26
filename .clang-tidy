@@ -1,0 +1,3 @@
+Checks: '-*,clang-analyzer-*,bugprone-*,misc-include-cleaner,performance-*,portability-*'
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(^|/)(native|compat)/'

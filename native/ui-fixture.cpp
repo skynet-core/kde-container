@@ -2,11 +2,17 @@
 // Test-only editor: the output file is written exclusively by a Save UI action.
 #include <QApplication>
 #include <QFile>
+#include <QFileDevice>
+#include <QKeySequence>
 #include <QLabel>
+#include <QObject>
 #include <QPushButton>
 #include <QShortcut>
+#include <QString>
 #include <QTextEdit>
 #include <QVBoxLayout>
+#include <QWidget>
+#include <qnamespace.h>
 
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
