@@ -110,6 +110,9 @@ service; the init module selects the values written into `session.env`.
 | `TARGET_APP` | Unset | Executable and quoted arguments; empty keeps the ordinary Plasma session |
 | `DISPLAY_WIDTH`, `DISPLAY_HEIGHT` | `1920`, `1080` | Initial dimensions; validated as 10–9999 |
 | `PLASMA_UID`, `PLASMA_GID` | Current image account IDs | Optional account adjustment; launcher supplies host IDs for Docker nested mode and every Podman mode |
+| `PLASMA_PASSWORD` | Unset | Configure the Linux account password at startup; unset preserves the existing password |
+| `PLASMA_PASSWORD_FILE` | Unset | Read a nonempty single-line password from this container path; overrides `PLASMA_PASSWORD` |
+| `PLASMA_SUDO_NOPASSWD` | `false` | Accepts `true` or `false`; toggles passwordless versus password-required sudo |
 | `HOST_WAYLAND_DISPLAY` | Detected | Absolute mounted path or name relative to the host runtime mount |
 | `HOST_XDG_RUNTIME_DIR` | Host hint from `XDG_RUNTIME_DIR`, otherwise `/run/host/runtime` | Search directory for host Wayland sockets |
 | `HOST_DISPLAY` | Host hint from `DISPLAY`, otherwise detected | Local X11 display whose socket is mounted |
@@ -125,6 +128,13 @@ service; the init module selects the values written into `session.env`.
 existing-account conflicts can still restrict which valid numbers are usable.
 Host/socket hints are inputs to detection; the generated desktop environment is
 private and does not reuse the host's runtime as its own.
+
+Account password and sudo settings are applied by `300-plasma-user.sh` before
+desktop services start. The launcher treats `PLASMA_PASSWORD_FILE` as a host path
+and mounts it read-only at `/run/secrets/plasma-password`. Passwords are hashed in
+`/etc/shadow`; the plaintext value is removed from the init environment and is not
+written into `session.env`. `/etc/sudoers` includes the managed root-owned
+`/etc/sudoers.d/90-plasma` policy, installed with mode `0440` and checked by `visudo`.
 
 ### Generated or internal values
 

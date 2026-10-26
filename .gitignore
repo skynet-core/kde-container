@@ -11,3 +11,4 @@ __pycache__/
 vnc-password
 .vscode/
 .ruff_cache/
+plasma-password

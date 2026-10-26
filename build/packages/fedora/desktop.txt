@@ -27,6 +27,7 @@ python3
 python3-websockify
 dbus-tools
 util-linux
+sudo
 shadow-utils
 curl
 ca-certificates

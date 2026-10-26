@@ -1456,6 +1456,76 @@ TLS reverse proxy for network access. KRFB virtualmonitor currently accepts its
 password as a process argument; a password file avoids also recording it in the
 container's configured environment.
 
+## Plasma account password and sudo
+
+`PLASMA_PASSWORD` sets the Linux password for `plasma` at startup. Leaving it unset
+preserves the existing account password; a fresh image has no password login until
+you configure one. Normal `sudo` requires this password. Set
+`PLASMA_SUDO_NOPASSWD=true` to allow `sudo` without a password, including when no
+account password is configured. These options work with all four distributions
+and every display mode. `VNC_PASSWORD` remains the separate remote-access password.
+
+```bash
+# Docker: configure the account and opt in to passwordless sudo.
+# Replace the image tag with debian-13, ubuntu-26.04 or archlinux as needed.
+docker run -d --name plasma6-account --privileged --user=0:0 \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e DISPLAY_MODE=headless -e PLASMA_PASSWORD='ChangeThisPassword42!' \
+  -e PLASMA_SUDO_NOPASSWD=true plasma6:fedora-44
+# The command runs as plasma, then sudo switches to container root (prints 0).
+docker exec --user=plasma plasma6-account sudo -n id -u
+```
+
+```bash
+# Rootless Podman: keep PID 1 as root while mapping the desktop to your host user.
+podman run -d --name plasma6-account --privileged --systemd=always \
+  --userns=keep-id --user=0:0 --passwd=false --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_MODE=headless -e PLASMA_PASSWORD='ChangeThisPassword42!' \
+  -e PLASMA_SUDO_NOPASSWD=true plasma6:fedora-44
+podman exec --user=plasma plasma6-account sudo -n id -u
+```
+
+Omit `PLASMA_SUDO_NOPASSWD` or set it to `false` for password-required sudo. From
+a desktop terminal, run `sudo <command>` and enter the configured account password.
+The managed, root-owned `/etc/sudoers.d/90-plasma` file is included by
+`/etc/sudoers`; its contents are validated with `visudo` on every start. The
+passwordless setting writes `plasma ALL=(ALL) NOPASSWD: ALL`. The file is replaced
+on each start, so disabling the option removes that passwordless grant.
+
+For a password outside the container's configured environment, create a host file
+and use `PLASMA_PASSWORD_FILE`. A file takes precedence over `PLASMA_PASSWORD`:
+
+```bash
+# Prompt without echoing the password and restrict the host file to its owner.
+python3 - <<'PY'
+from getpass import getpass
+from pathlib import Path
+
+path = Path("plasma-password")
+path.touch(mode=0o600)
+path.chmod(0o600)
+path.write_text(getpass("Password for the plasma account: "))
+PY
+
+# Docker: password-required sudo with a mounted account secret.
+docker run -d --name plasma6-account-file --privileged --user=0:0 \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 -e DISPLAY_MODE=headless \
+  --mount "type=bind,source=$PWD/plasma-password,target=/run/secrets/plasma-password,readonly" \
+  -e PLASMA_PASSWORD_FILE=/run/secrets/plasma-password plasma6:fedora-44
+docker exec -it --user=plasma plasma6-account-file sudo id -u
+```
+
+Passwords must be nonempty single lines, without carriage returns. A final newline
+in a password file is accepted. Init hashes the password with `chpasswd` and
+does not copy the value into `/etc/plasma/session.env`. The optional host launcher
+forwards both options and mounts a host `PLASMA_PASSWORD_FILE` automatically.
+Passwordless sudo grants full root privileges inside the container; under rootless
+Podman, root remains limited to its user namespace.
+
 ## Configuration and implementation
 
 | Variable | Default | Meaning |
@@ -1465,6 +1535,9 @@ container's configured environment.
 | `TARGET_APP` | unset | Optional executable and quoted arguments; selects a fullscreen application session |
 | `DISPLAY_WIDTH`, `DISPLAY_HEIGHT` | `1920`, `1080` | Initial dimensions, 10–9999 pixels |
 | `PLASMA_UID`, `PLASMA_GID` | image account IDs | Optional runtime desktop identity |
+| `PLASMA_PASSWORD` | unset | Set the Linux account password; unset preserves it |
+| `PLASMA_PASSWORD_FILE` | unset | Container password-file path; takes precedence over `PLASMA_PASSWORD` |
+| `PLASMA_SUDO_NOPASSWD` | `false` | `true` permits passwordless sudo; `false` requires the account password |
 | `HOST_WAYLAND_DISPLAY` | detected | Mounted socket path, or name relative to the host runtime mount |
 | `HOST_XDG_RUNTIME_DIR` | `$XDG_RUNTIME_DIR` or `/run/host/runtime` | Host runtime socket search directory |
 | `HOST_DISPLAY` | `$DISPLAY` or detected | Mounted local X11 display, e.g. `:0` |

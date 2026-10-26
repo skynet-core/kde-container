@@ -18,6 +18,18 @@ args=(run --rm --name "${CONTAINER_NAME:-plasma6}" --user=0:0 --privileged --cgr
 	-e "DISPLAY_WIDTH=${DISPLAY_WIDTH:-1920}" -e "DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-1080}")
 args+=(-e "VNC_MAX_FPS=${VNC_MAX_FPS:-60}")
 if [[ -n ${TARGET_APP:-} ]]; then args+=(-e "TARGET_APP=$TARGET_APP"); fi
+if [[ -n ${PLASMA_PASSWORD_FILE:-} ]]; then
+	plasma_password_file=$(realpath -- "$PLASMA_PASSWORD_FILE")
+	args+=(--mount "type=bind,source=$plasma_password_file,target=/run/secrets/plasma-password,readonly"
+		-e PLASMA_PASSWORD_FILE=/run/secrets/plasma-password)
+elif [[ -v PLASMA_PASSWORD ]]; then
+	export PLASMA_PASSWORD
+	args+=(-e PLASMA_PASSWORD)
+fi
+if [[ -v PLASMA_SUDO_NOPASSWD ]]; then
+	export PLASMA_SUDO_NOPASSWD
+	args+=(-e PLASMA_SUDO_NOPASSWD)
+fi
 if [[ $engine == podman ]]; then
 	# The inherited entrypoint is a shell script, so force systemd mount setup.
 	args+=(--systemd=always --passwd=false --userns=keep-id --health-cmd=/usr/local/bin/plasma-healthcheck

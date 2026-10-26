@@ -180,6 +180,17 @@ provides a common `qdbus-qt6` command despite distribution naming differences.
 [`collect-artifacts`](../build/collect-artifacts) queries Qt's library directory
 through pkg-config, preserving Fedora's `/usr/lib64`, Debian/Ubuntu multiarch
 directories and Arch's `/usr/lib` plugin paths.
+
+At startup, `300-plasma-user.sh` also applies an optional Linux account password
+and the sudo policy. `chpasswd` receives plaintext through standard input and
+stores its hash; `useradd --password` and `usermod --password` expect an existing
+hash. The account password remains unchanged when no password option is provided.
+The root-owned `/etc/sudoers.d/90-plasma` file gives `plasma` password-required sudo
+by default, or `NOPASSWD: ALL` when `PLASMA_SUDO_NOPASSWD=true`. Init validates the
+policy with `visudo`. These settings apply after account mapping and before any
+desktop service starts; rootless Podman's sudo remains inside the container's
+user namespace. See the [account examples](../README.md#plasma-account-password-and-sudo).
+
 Newer KWin wrappers begin socket numbering at `wayland-1`; the backend adapter
 creates a `wayland-0` symlink to that private socket so service and client paths
 remain stable. The noVNC service resolves websockify through `PATH`, supporting

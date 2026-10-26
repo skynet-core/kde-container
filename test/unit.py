@@ -97,6 +97,9 @@ class SupportTests(unittest.TestCase):
                 "TARGET_APP": "unexpected-host-app",
                 "VNC_PASSWORD_FILE": "/not/a/test/secret",
                 "BIND_ADDRESS": "0.0.0.0",
+                "PLASMA_PASSWORD": "unexpected-host-password",
+                "PLASMA_PASSWORD_FILE": "/not/a/test/account-secret",
+                "PLASMA_SUDO_NOPASSWD": "true",
             }
             for runtime in ("docker", "podman"):
                 for mode in ("headless", "nested", "vnc", "web"):
@@ -125,6 +128,8 @@ class SupportTests(unittest.TestCase):
                         self.assertIn(f"PLASMA_GID={os.getgid()}", arguments)
                         self.assertIn("DISPLAY_WIDTH=800", arguments)
                         self.assertNotIn("TARGET_APP=unexpected-host-app", arguments)
+                        self.assertNotIn("PLASMA_PASSWORD", arguments)
+                        self.assertNotIn("PLASMA_SUDO_NOPASSWD", arguments)
                         if mode == "nested":
                             self.assertIn(
                                 "HOST_WAYLAND_DISPLAY=/run/host/wayland", arguments
@@ -137,6 +142,47 @@ class SupportTests(unittest.TestCase):
                             self.assertNotIn("-p", arguments)
                         if runtime == "podman":
                             self.assertIn("--systemd=always", arguments)
+
+            for runtime in ("docker", "podman"):
+                for use_file in (False, True):
+                    password_file = directory / "account-password"
+                    password_file.write_text("Test-account-password-42!")
+                    settings = {
+                        "PLASMA_PASSWORD": "Test-account-password-42!",
+                        "PLASMA_SUDO_NOPASSWD": "true",
+                    }
+                    if use_file:
+                        settings["PLASMA_PASSWORD_FILE"] = str(password_file)
+                    with (
+                        self.subTest(runtime=runtime, use_file=use_file),
+                        patch.dict(os.environ, environment, clear=True),
+                    ):
+                        result = support.launch(
+                            runtime,
+                            "image",
+                            "fixture",
+                            "wayland",
+                            "headless",
+                            **settings,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        arguments = json.loads(result.stdout)
+                        self.assertIn("PLASMA_SUDO_NOPASSWD", arguments)
+                        self.assertNotIn(
+                            "Test-account-password-42!", " ".join(arguments)
+                        )
+                        if use_file:
+                            self.assertIn(
+                                f"type=bind,source={password_file},target=/run/secrets/plasma-password,readonly",
+                                arguments,
+                            )
+                            self.assertIn(
+                                "PLASMA_PASSWORD_FILE=/run/secrets/plasma-password",
+                                arguments,
+                            )
+                            self.assertNotIn("PLASMA_PASSWORD", arguments)
+                        else:
+                            self.assertIn("PLASMA_PASSWORD", arguments)
 
     def test_software_device_options(self):
         for present in (False, True):

@@ -28,6 +28,7 @@ python-jwcrypto
 python-redis
 dbus
 util-linux
+sudo
 shadow
 curl
 ca-certificates

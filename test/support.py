@@ -68,6 +68,9 @@ def launch(runtime, image, name, backend, mode, *options, **settings):
         **settings,
     }
     environment.pop("VNC_PASSWORD_FILE", None)
+    for setting in ("PLASMA_PASSWORD", "PLASMA_PASSWORD_FILE", "PLASMA_SUDO_NOPASSWD"):
+        if setting not in settings:
+            environment.pop(setting, None)
     return run(
         str(ROOT / "bin/plasma6-run"),
         "-d",

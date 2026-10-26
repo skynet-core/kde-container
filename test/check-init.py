@@ -12,6 +12,35 @@ BACKENDS = ("wayland", "x11") if Path("/usr/bin/kwin_x11").exists() else ("wayla
 
 
 class InitTests(unittest.TestCase):
+    def sudo(self, password=None):
+        return subprocess.run(
+            [
+                "runuser",
+                "-u",
+                "plasma",
+                "--",
+                "sudo",
+                "-k",
+                "-p",
+                "",
+                "-n" if password is None else "-S",
+                "/usr/bin/id",
+                "-u",
+            ],
+            input=None if password is None else password + "\n",
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+    def shadow(self, user="plasma"):
+        return next(
+            line.split(":")[1]
+            for line in Path("/etc/shadow").read_text().splitlines()
+            if line.startswith(user + ":")
+        )
+
     def boot(self, expected=0, **settings):
         environment = {
             "PATH": os.environ["PATH"],
@@ -93,6 +122,94 @@ class InitTests(unittest.TestCase):
         for value in ("0", "61", "-1", "1.5", "oops"):
             with self.subTest(value=value):
                 self.assertIn("VNC_MAX_FPS", self.boot(expected=1, VNC_MAX_FPS=value))
+
+    def test_plasma_password_and_authenticated_sudo(self):
+        self.boot()
+        before = self.shadow()
+        self.boot()
+        self.assertEqual(self.shadow(), before)
+        self.assertNotEqual(self.sudo().returncode, 0)
+        password = "Q7:Env-$'\\Account42!"
+        config = self.boot(PLASMA_PASSWORD=password)
+        self.assertNotIn("PLASMA_PASSWORD", config)
+        self.assertNotIn(password, Path("/etc/plasma/session.env").read_text())
+        self.assertNotEqual(self.shadow(), password)
+        self.assertNotEqual(self.shadow(), before)
+        result = self.sudo(password)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "0")
+        self.assertNotEqual(self.sudo("incorrect-password").returncode, 0)
+        saved = self.shadow()
+        self.boot()
+        self.assertEqual(self.shadow(), saved)
+
+    def test_plasma_password_file_and_invalid_settings(self):
+        path = Path("/tmp/plasma-test-account-password")
+        password = 'R8:File-$ \\"Account42!'
+        path.write_text(password + "\n")
+        path.chmod(0o600)
+        try:
+            self.boot(PLASMA_PASSWORD="ignored-value", PLASMA_PASSWORD_FILE=str(path))
+            result = self.sudo(password)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "0")
+            root_password = self.shadow("root")
+            before = self.shadow()
+            for settings in (
+                {"PLASMA_PASSWORD": ""},
+                {"PLASMA_PASSWORD": "one\nroot:injected"},
+                {"PLASMA_PASSWORD": "one\rroot:injected"},
+                {"PLASMA_PASSWORD_FILE": "/does/not/exist"},
+                {"PLASMA_PASSWORD_FILE": "/tmp"},
+                {"PLASMA_SUDO_NOPASSWD": "yes"},
+                {"PLASMA_SUDO_NOPASSWD": "false\n"},
+                {"PLASMA_SUDO_NOPASSWD": ""},
+            ):
+                with self.subTest(settings=settings):
+                    self.assertIn("PLASMA_", self.boot(expected=1, **settings))
+                    self.assertEqual(self.shadow(), before)
+                    self.assertEqual(self.shadow("root"), root_password)
+            for contents in ("", "line1\nline2\n", "line1\rline2"):
+                path.write_text(contents)
+                self.assertIn(
+                    "PLASMA_PASSWORD",
+                    self.boot(expected=1, PLASMA_PASSWORD_FILE=str(path)),
+                )
+                self.assertEqual(self.shadow(), before)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_passwordless_sudo_toggle_with_runtime_identity(self):
+        uid = subprocess.check_output(["id", "-u", "plasma"], text=True).strip()
+        gid = subprocess.check_output(["id", "-g", "plasma"], text=True).strip()
+        policy = Path("/etc/sudoers.d/90-plasma")
+        try:
+            for _ in range(2):
+                self.boot(
+                    PLASMA_UID="23002", PLASMA_GID="23003", PLASMA_SUDO_NOPASSWD="true"
+                )
+                self.assertEqual(policy.read_text(), "plasma ALL=(ALL) NOPASSWD: ALL\n")
+                self.assertEqual(
+                    (
+                        policy.stat().st_uid,
+                        policy.stat().st_gid,
+                        policy.stat().st_mode & 0o777,
+                    ),
+                    (0, 0, 0o440),
+                )
+                result = self.sudo()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "0")
+            self.boot(PLASMA_SUDO_NOPASSWD="false")
+            self.assertEqual(policy.read_text(), "plasma ALL=(ALL) ALL\n")
+            self.assertNotEqual(self.sudo().returncode, 0)
+            result = subprocess.run(
+                ["visudo", "--check"], text=True, capture_output=True, check=False
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("90-plasma", result.stdout)
+        finally:
+            self.boot(PLASMA_UID=uid, PLASMA_GID=gid, PLASMA_SUDO_NOPASSWD="false")
 
     def test_gpu_preference_and_software_override(self):
         automatic = self.boot()
