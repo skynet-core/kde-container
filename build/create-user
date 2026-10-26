@@ -3,6 +3,7 @@ set -euo pipefail
 uid=${PLASMA_UID:-1000}
 gid=${PLASMA_GID:-1000}
 password=${PLASMA_PASSWORD:-plasma}
+cowpower="${PLASMA_NO_PASSWORD:-}"
 group=$(getent group "$gid" | cut -d: -f1 || true)
 if [[ -z $group ]]; then
 	groupadd --gid "$gid" plasma
@@ -23,7 +24,7 @@ fi
 chown -R plasma: /home/plasma
 install -d -m 1777 /tmp/.X11-unix
 install -d /etc/plasma /opt/noVNC
-if [[ -n "$PLASMA_NO_PASSWORD" ]] &&
+if [[ -n "$cowpower" ]] &&
 	! grep -qiP "^plasma ALL=\(ALL\) NOPASSWD: ALL" /etc/sudoers; then
 	echo "plasma ALL=(ALL) NOPASSWD: ALL" >>/etc/sudoers
 fi
