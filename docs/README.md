@@ -31,7 +31,7 @@ and then follow its chapter links.
 
 The desktop applications and their supporting services are ordinary Linux
 processes. They run inside container-specific views of processes, files and the
-network, while using the host's Linux kernel. The image supplies Fedora userspace,
+network, while using the host's Linux kernel. The image supplies distribution userspace,
 Plasma and the configuration that connects those processes.
 
 Systemd supervises the desktop and its companion services. KWin manages windows
@@ -95,7 +95,9 @@ host socket access and host file writes work.
 
 The image contains the desktop, runtime libraries, init modules, unit files,
 noVNC assets and the compiled KWin input plugin. It inherits its systemd init
-framework from `ghcr.io/skynet-core/systemd:fedora-44`.
+framework from `ghcr.io/skynet-core/systemd:<distro>` (Fedora 44 by default).
+Debian 13 and Ubuntu 26.04 also support all eight profiles; current rolling Arch
+supports the four Wayland profiles. See [distribution variants and publication](02-build-and-boot.md#distribution-variants-and-publication).
 
 The production stage excludes the compiler/build stage and the test-only Qt editor.
 The test targets deliberately include the editor so automated tests can manipulate
@@ -103,8 +105,8 @@ a real window and save a real file. This separation appears in the
 [build-stage schematic](02-build-and-boot.md#the-build-stage-graph).
 
 There is no physical-monitor requirement for headless, VNC or web modes. The default
-configuration requests software rendering. A GPU can be exposed separately, but
-software rendering is the baseline described here.
+configuration prefers GPU rendering when the desktop user can open a render node.
+Otherwise it selects software rendering automatically.
 
 ## How the documentation is tied to the code
 

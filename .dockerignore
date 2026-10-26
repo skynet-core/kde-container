@@ -1,5 +1,14 @@
 *
 !Dockerfile
+!Dockerfile.*
+!build/
+!build/install-packages
+!build/create-user
+!build/normalize-runtime
+!build/collect-artifacts
+!build/websockify-requirements.txt
+!build/packages/
+!build/packages/**
 !init.d/
 !init.d/**
 !bin/
@@ -14,4 +23,6 @@
 !native/**
 !patches/
 !patches/**
+!compat/
+!compat/**
 **/__pycache__

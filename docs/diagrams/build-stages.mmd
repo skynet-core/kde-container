@@ -1,8 +1,11 @@
 flowchart TD
-    base["Systemd Fedora 44 base"]
+    base["Systemd base: Fedora / Debian / Ubuntu / Arch"]
     packages["desktop-packages: packages and account"]
+    applications["application-packages: Chromium kiosk browser"]
     desktop["desktop: scripts, units and defaults"]
-    build["input-build: compilers, headers, CMake and Ninja"]
+    source["input-source: compilers, headers and KRFB sources"]
+    build["input-build: KWin plugin and test programs"]
+    xtest["xtest-build: software keyboard compatibility"]
     input["input-runtime: KWin input plugin and permission"]
     vnc["vnc-build: patched upstream virtual monitor and capture"]
     runtime["runtime: input plus capture and scheduling fixes"]
@@ -11,14 +14,19 @@ flowchart TD
     baseline["ui-baseline: stock KRFB plus test editor"]
     perfbaseline["ui-perf-baseline: stock KRFB with working input"]
     base -->|FROM| packages
-    packages -->|FROM| desktop
-    packages -->|FROM| build
+    packages -->|FROM| applications
+    applications -->|FROM| desktop
+    packages -->|FROM| source
+    source -->|FROM| build
     desktop -->|FROM| input
     desktop -->|FROM| baseline
-    build -->|FROM| vnc
+    source -->|FROM| vnc
+    build -->|FROM| xtest
     input -->|FROM| runtime
     input -->|FROM| perfbaseline
     build -. "COPY kwin.so" .-> input
+    xtest -. "COPY xtest-paced.so" .-> input
+    xtest -. "COPY xtest-paced.so" .-> baseline
     vnc -. "COPY executable and pw.so" .-> runtime
     build -. "COPY test editor" .-> baseline
     build -. "COPY benchmark" .-> perfbaseline

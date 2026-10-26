@@ -11,7 +11,7 @@ variable at startup does not reinstall the desktop.
 
 | Phase | Examples | Where to read the implementation |
 | --- | --- | --- |
-| Build | Install Fedora packages, download noVNC, compile `kwin.so` | [Dockerfile](../Dockerfile), [native CMake project](../native/CMakeLists.txt) |
+| Build | Install distribution packages, download noVNC, compile `kwin.so` | [Dockerfile](../Dockerfile), [native CMake project](../native/CMakeLists.txt) |
 | Startup before systemd | Adjust account IDs, detect sockets, write environment and target link | [init modules](../init.d/modules/) |
 | Runtime under systemd | Start KWin, D-Bus, the display server and remote services | [system units](../systemd/system/), [helpers](../libexec/) |
 | Host validation | Check modes, manipulate windows, read host output | [tests](../test/) |
@@ -57,11 +57,14 @@ files without making the build stage the final runtime filesystem.
 
 | Stage | Contents | Why it exists |
 | --- | --- | --- |
-| `desktop-packages` | Fedora desktop packages and account | Share cached package installation across build/runtime stages |
+| `desktop-packages` | Distribution desktop packages and account | Share cached package installation across build/runtime stages |
+| `application-packages` | Desktop packages plus Chromium | Include the reference kiosk browser without adding it to compiler stages |
 | `desktop` | Packages plus scripts, units and defaults | Common runtime foundation |
-| `input-build` | Packages plus development tools and KRFB sources | Compile the KWin event plugin and Qt test programs |
-| `input-runtime` | `desktop` plus `kwin.so` and its desktop permission | Working remote input with Fedora's original KRFB |
-| `vnc-build` | `input-build` plus upstream build dependencies | Build the patched virtual monitor and PipeWire capture plugin |
+| `input-source` | Development tools and checksum-verified KRFB sources | Common foundation for independent input and capture builds |
+| `input-build` | `input-source` plus the project's native source | Compile the KWin event plugin and Qt test programs |
+| `xtest-build` | `input-build` plus a small XTest compatibility library | Preserve rapid keyboard modifiers on the software capture path |
+| `input-runtime` | `desktop` plus `kwin.so` and its desktop permission | Working remote input with the distribution's original KRFB |
+| `vnc-build` | `input-source` plus upstream build dependencies | Build the patched virtual monitor and PipeWire capture plugin |
 | `runtime` | `input-runtime` plus those two patched artifacts | Complete desktop with input and performance fixes |
 | `plasma6` | Inherits `runtime` | Last stage; the default production build target |
 | `ui-test` | `runtime` plus the Qt editor and animation benchmark | Interactive and performance regression tests |
@@ -89,7 +92,8 @@ use separate image stores; building a tag in one does not create it in the other
 
 ### Packages and why they are grouped this way
 
-The package list in the Dockerfile supplies these roles:
+The lists in [`build/packages/`](../build/packages/) supply these roles. Their
+names differ between package managers, while the service configuration is shared:
 
 | Group | Examples | Role |
 | --- | --- | --- |
@@ -113,7 +117,7 @@ noVNC and the KRFB source archive are downloaded over HTTPS and checked against
 SHA-256 values recorded in the Dockerfile before extraction. The KRFB source is
 used for the private event-plugin headers and to build the virtual-monitor program
 and PipeWire plugin with a small performance patch. The remaining KRFB components,
-including `libkrfbprivate`, come from Fedora packages. The patch is applied with
+including `libkrfbprivate`, come from distribution packages. The patch is applied with
 zero fuzz so source drift fails the build instead of silently changing its meaning.
 
 ```bash
@@ -127,8 +131,116 @@ rg 'ARG (NOVNC|KRFB_SOURCE)' Dockerfile
 
 A checksum detects an archive differing from the expected bytes. It does not by
 itself prove who selected those bytes. Nor do two pinned archives make the entire
-image reproducible: the base tag and Fedora repositories can change. Record image
+image reproducible: the base tag and distribution repositories can change. Record image
 IDs and package versions when reproducing a test result.
+
+## Distribution variants and publication
+
+The four explicit Dockerfiles match all four published systemd bases: Fedora 44,
+Debian 13, Ubuntu 26.04 and rolling Arch. The unqualified `Dockerfile` remains the
+Fedora default. [`build/render-dockerfiles.py`](../build/render-dockerfiles.py)
+generates the named files from it; CI uses `--check` to reject drift.
+
+```bash
+# HOST: select the distribution through its Dockerfile, rather than substituting
+# an incompatible base under Fedora's package list.
+docker build -f Dockerfile.debian-13 -t plasma6:debian-13 .
+podman build --format docker --layers -f Dockerfile.archlinux -t plasma6:archlinux .
+
+# HOST, maintainer: after editing the common template or generator, regenerate.
+python3 build/render-dockerfiles.py
+python3 build/render-dockerfiles.py --check
+```
+
+[`install-packages`](../build/install-packages) selects DNF, APT or pacman from
+`/etc/os-release`. Each family has separate `desktop.txt`, `browser.txt`,
+`input-build.txt` and `vnc-build.txt` lists. Only a stage's relevant list is copied
+before installation, so changing a compiler dependency does not invalidate the
+desktop package cache. Ubuntu also has a `session.txt` list for its separately
+packaged `plasma-session-x11` launcher. Arch uses a complete `pacman -Syu` update to avoid partial
+upgrades. Its websockify launcher lives in an isolated Python environment, with a
+checksum-pinned wheel and dependencies supplied by native Arch packages.
+
+Ubuntu's Chromium package is a Snap transition package. A separate Debian stage
+downloads `chromium`, `chromium-common`, `chromium-sandbox` and `libjpeg62-turbo`
+using signed APT metadata. Ubuntu installs those application files, resolving
+remaining libraries from its own repositories. This avoids running snapd inside
+the container. The Debian repository is never configured on the Ubuntu system.
+The browser version follows Debian security updates at build time, so rebuild
+the image to receive them.
+
+[`create-user`](../build/create-user) also handles Ubuntu's existing UID 1000
+account by renaming it to `plasma`. [`normalize-runtime`](../build/normalize-runtime)
+provides a common `qdbus-qt6` command despite distribution naming differences.
+[`collect-artifacts`](../build/collect-artifacts) queries Qt's library directory
+through pkg-config, preserving Fedora's `/usr/lib64`, Debian/Ubuntu multiarch
+directories and Arch's `/usr/lib` plugin paths.
+Newer KWin wrappers begin socket numbering at `wayland-1`; the backend adapter
+creates a `wayland-0` symlink to that private socket so service and client paths
+remain stable. The noVNC service resolves websockify through `PATH`, supporting
+both distribution executables and Arch's dedicated Python environment.
+
+Current Arch has removed the Plasma X11 session. It supports all four **Wayland**
+modes, including nesting a Wayland session on an X11 host. `auto` selects Wayland;
+explicit `DISPLAY_BACKEND=x11` fails at init. The other three distributions retain
+all eight profiles. Debian's older KWin fake-input v5 is supported through its
+actual keyboard keymap; newer KWin uses v6 keysym events directly.
+
+Debian's KWin 6.3 virtual backend cannot create the additional `Virtual-Plasma`
+output used by newer releases. Its image contains `/etc/plasma/vnc-existing-output`;
+init exports the corresponding internal flag, and a
+[small capture patch](../patches/krfb-existing-output.patch) streams the backend's
+existing monitor through PipeWire. This preserves GPU rendering and avoids an
+interactive portal dialog. Software capture still uses the private Xvfb path.
+
+Health probes switch to the desktop's UID, GID and supplementary groups directly
+through Python's subprocess settings. Invoking PAM through `runuser` can replace
+the configured private bus with `/run/user/<uid>/bus` on Arch; direct ID switching
+keeps probes attached to the same session as the services.
+
+Kiosk bypasses `startplasma`, so the session helper prepares KDE's application
+metadata cache with `kbuildsycoca6` and the standard `XDG_MENU_PREFIX=plasma-`.
+Older KWin uses that cache to discover KRFB's allowed Wayland interfaces. This
+bootstrap enables scoped capture/input permissions without starting Plasma shell.
+
+Arch's KWin 6.8 removed QPainter. Its capability marker
+`/etc/plasma/opengl-software-capture` keeps software rendering on the virtual
+OpenGL/PipeWire path. Mesa performs the rendering on the CPU; the kernel's
+`/dev/udmabuf` exports its memory buffers. The host must provide that device and
+allow the rootless user access. Docker recreates device nodes without host ACLs,
+so init adds the desktop account to the node's local group. It never changes host
+device permissions. CI loads the kernel driver and grants its disposable runner
+group access before starting Arch's no-GPU tests.
+
+![Build, validate and publish each distribution](diagrams/publication.svg)
+
+[Mermaid source](diagrams/publication.mmd).
+
+The [GitHub Actions workflow](../.github/workflows/build-and-publish.yml) uses four
+matrix entries on an AMD64 Ubuntu runner. Each entry builds its production image,
+checks init and systemd units, and boots headless/VNC/web profiles. A separate
+`ui-test` target adds fixtures for mouse dragging, screenshot comparisons, typing
+to a host file mount and Chromium kiosk tests. No desktop socket is available on
+the hosted runner, so nested mode must be tested locally.
+
+Only successful push/manual publishing runs log in to GHCR. Pull requests build
+and test without publishing. The login uses the repository's `GITHUB_TOKEN` with
+`packages: write`; no separate registry password is required. If an existing GHCR
+package belongs to another repository, its package settings must grant this
+repository Actions access. Initial package visibility is controlled by GHCR's
+package settings.
+
+The workflow retags and pushes the already tested **production image**, keeping
+fixtures out of published images and avoiding a second build against changed
+rolling repositories. The destination follows the repository name:
+`ghcr.io/<owner>/<repository>`. Moving distro tags are updated on `main`; only
+Fedora also updates `latest`. Commit tags use `sha-<full-sha>-<distro>`, and release
+tags use `<version-tag>-<distro>`. Unique distro suffixes prevent matrix jobs from
+overwriting each other's images. Journals, screenshots and mounted output files
+are uploaded even after test failure, with 14 days of artifact retention.
+
+The workflow currently publishes `linux/amd64`. Other architectures need their
+own dependency and GUI validation before being added to the platform list.
 
 ### Build context and `.dockerignore`
 
@@ -360,6 +472,70 @@ ExecStartPre=/usr/local/libexec/plasma-wait ${DISPLAY_BACKEND}
 `Type=oneshot` is used for a finite preparation command; `RemainAfterExit=yes` keeps
 its completed state active. `Type=exec` is used for long-running processes.
 
+## Choosing a desktop or one application
+
+![Kiosk startup and application supervision](diagrams/kiosk.svg)
+
+[Mermaid source](diagrams/kiosk.mmd).
+
+Without `TARGET_APP`, `plasma-session` uses the existing `startplasma-wayland` or
+`startplasma-x11` path. Supplying an application selects KWin directly, with no
+Plasma shell, desktop panels, splash program or desktop-session autostart.
+The display targets and private bus remain the same, so the choice works with
+nested, headless, VNC and web modes on either desktop backend.
+
+The init module validates the executable as the unprivileged `plasma` user before
+PID 1 starts. Arguments follow quoted command-line syntax and are split using
+Python's `shlex.split`; no shell evaluates the string. Fedora calls its Chromium
+executable `chromium-browser`; the helper also accepts the public `chromium` name.
+
+```bash
+# Container environment examples: one command string, not a shell program.
+# A URL containing spaces or shell metacharacters remains an application argument.
+export TARGET_APP='chromium "https://example.org/?label=hello world&view=kiosk"'
+
+# A custom launcher should stay in the foreground; exec replaces its shell.
+# In an executable /usr/local/bin/my-kiosk script:
+# exec /usr/bin/my-gui --configuration /etc/my-app/config.json
+```
+
+Kiosk configuration is isolated with
+`XDG_CONFIG_HOME=/home/plasma/.config/plasma-kiosk`. Before starting KWin, the
+helper writes a rule forcing normal application windows fullscreen and without
+borders. Dialog windows retain their normal behavior. Chromium additionally gets
+`--kiosk`, first-run suppression flags and the matching `--ozone-platform`.
+The ordinary desktop's KWin configuration is unaffected.
+
+On Wayland, `kwin_wayland_wrapper` still owns the display sockets and authentication
+files. KWin's `--exit-with-session` launches the fixed supervisor helper after the
+Wayland/Xwayland environment is ready. On X11, the session script supervises
+`kwin_x11` and that helper together. Applications receive the compositor's real
+display environment, including Xwayland credentials for compatible X11 clients.
+See [KWin's session startup implementation](https://github.com/KDE/kwin/blob/Plasma/6.7/src/main_wayland.cpp)
+and [Chromium's Ozone platform documentation](https://chromium.googlesource.com/chromium/src/+/main/docs/ozone_overview.md)
+for these upstream interfaces.
+
+The helper waits for the compositor and, for remote modes, the exported output.
+It then uses the following pattern:
+
+```python
+# Start the GUI directly with an argument list, without a shell.
+# A separate process group lets shutdown include the app's helper processes.
+child = subprocess.Popen(arguments, start_new_session=True)
+```
+
+If the application exits, its process group is cleaned up and the helper launches
+it again after two seconds. KWin and the remote server keep running. Container
+shutdown forwards termination to the application group, allows a bounded graceful
+exit and removes the readiness marker.
+
+`/run/plasma/target-app.json` records the application PID and its Linux process
+start time. Checking both avoids mistaking a reused PID for the original app.
+In kiosk mode, readiness requires KWin and that live process; ordinary desktop
+readiness continues to require `org.kde.plasmashell`. Remote listener/output checks
+apply in both cases. Readiness checks the process lifecycle; the UI suite separately
+checks that a real fullscreen window and input feedback appear.
+
 ## Two D-Bus buses and named desktop services
 
 D-Bus is a message system for communication between processes. A bus helps clients
@@ -410,7 +586,7 @@ management with bounded readiness probes.
 | `desktop` | The private D-Bus reports an owner for `org.kde.plasmashell` |
 | `vnc` | TCP 5900 returns an RFB greeting |
 | `web` | HTTP 6080 serves `/vnc.html` with a 200 response |
-| Remote output check | Wayland has exactly one enabled output, named `Virtual-Plasma`, at `(0, 0)` |
+| Remote output check | Wayland has one enabled output at `(0, 0)`; GPU capture uses `Virtual-Plasma`, or Debian's existing monitor; software capture uses its parent display |
 
 `plasma-wait` normally retries for up to 60 seconds. The health checker sets its
 probe timeout to zero, so each health invocation reports current state rather than

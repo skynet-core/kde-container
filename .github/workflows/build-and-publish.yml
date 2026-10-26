@@ -1,0 +1,172 @@
+name: Build, test and publish images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish tested images to GHCR
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  images:
+    name: ${{ matrix.distro }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora-44
+            backends: wayland x11
+          - distro: debian-13
+            backends: wayland x11
+          - distro: ubuntu-26.04
+            backends: wayland x11
+          - distro: archlinux
+            backends: wayland
+    env:
+      PRODUCTION_IMAGE: plasma6:${{ matrix.distro }}
+      UI_IMAGE: plasma6:${{ matrix.distro }}-ui-test
+      TEST_BACKENDS: ${{ matrix.backends }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Prepare runner and check build sources
+        run: |
+          # These unused SDKs occupy space needed by the four-stage native build.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          python3 build/render-dockerfiles.py --check
+          shellcheck build/install-packages build/create-user build/normalize-runtime build/collect-artifacts
+          mkdir -p test/.artifacts
+
+      - uses: astral-sh/setup-uv@v7 # v7
+      - uses: docker/setup-buildx-action@v4 # v4
+
+      - name: Prepare Arch software rendering buffers
+        if: matrix.distro == 'archlinux'
+        run: |
+          # KWin 6.8 uses Mesa software OpenGL with kernel DMA buffers, even without a GPU.
+          if [[ ! -c /dev/udmabuf ]]; then sudo modprobe udmabuf; fi
+          sudo udevadm settle
+          sudo chgrp "$(id -g)" /dev/udmabuf
+          sudo chmod 0660 /dev/udmabuf
+
+      - name: Select registry and publication policy
+        id: registry
+        env:
+          REPOSITORY: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          MANUAL_PUBLISH: ${{ inputs.publish }}
+        run: |
+          echo "image=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          publish=false
+          if [[ "$EVENT" == push || ( "$EVENT" == workflow_dispatch && "$MANUAL_PUBLISH" == true ) ]]; then
+            publish=true
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      - name: Image tags and OCI labels
+        id: meta
+        uses: docker/metadata-action@v6 # v6
+        with:
+          images: ${{ steps.registry.outputs.image }}
+          flavor: latest=false
+          # Every moving, release and commit tag includes its distro. Only Fedora
+          # owns latest, so concurrent matrix jobs cannot overwrite one another.
+          tags: |
+            type=raw,value=${{ matrix.distro }},enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && matrix.distro == 'fedora-44' }}
+            type=sha,format=long,prefix=sha-,suffix=-${{ matrix.distro }}
+            type=ref,event=tag,suffix=-${{ matrix.distro }}
+            type=ref,event=pr,suffix=-${{ matrix.distro }}
+
+      - name: Build and load production image
+        uses: docker/build-push-action@v7 # v7
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.distro }}
+          target: plasma6
+          platforms: linux/amd64
+          pull: true
+          load: true
+          tags: ${{ env.PRODUCTION_IMAGE }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=plasma6-${{ matrix.distro }}
+          cache-to: type=gha,scope=plasma6-${{ matrix.distro }},mode=max
+
+      - name: Verify init, systemd targets and production desktop
+        env:
+          IMAGE_TAG: ${{ env.PRODUCTION_IMAGE }}
+        run: |
+          # The hosted runner has no host desktop socket for nested mode.
+          read -r -a backends <<< "$TEST_BACKENDS"
+          bash test/test.sh --capture --skip-nested --backends "${backends[@]}" 2>&1 | \
+              tee test/.artifacts/production.log
+
+      - name: Build and load GUI test fixtures
+        uses: docker/build-push-action@v7 # v7
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.distro }}
+          target: ui-test
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.UI_IMAGE }}
+          cache-from: type=gha,scope=plasma6-${{ matrix.distro }}
+
+      - name: Verify remote mouse, typing, screenshots and Chromium kiosk
+        run: |
+          read -r -a backends <<< "$TEST_BACKENDS"
+          uv run test/ui.py --image "$UI_IMAGE" --backends "${backends[@]}" 2>&1 | tee test/.artifacts/ui.log
+          uv run test/kiosk.py --image "$UI_IMAGE" --backends "${backends[@]}" --modes vnc web 2>&1 | tee test/.artifacts/kiosk.log
+
+      - name: Log in to GHCR
+        if: steps.registry.outputs.publish == 'true'
+        uses: docker/login-action@v4 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the tested production image
+        if: steps.registry.outputs.publish == 'true'
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Retag the already tested image: neither rebuild it nor ship fixtures.
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] || continue
+            docker tag "$PRODUCTION_IMAGE" "$tag"
+            docker push "$tag"
+            echo "Published \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$IMAGE_TAGS"
+
+      - name: Retain per-case journals, screenshots and mounted output files
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: validation-${{ matrix.distro }}
+          path: test/.artifacts/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

@@ -10,6 +10,9 @@ source of truth for behavior; the tables describe their current roles.
 ```text
 .
 ├── Dockerfile                     Build stages and image defaults
+├── Dockerfile.<distro>            Generated distribution-specific builds
+├── build/                         Package lists, build helpers and generator
+├── .github/workflows/             Build, GUI validation and GHCR publication
 ├── .dockerignore                  Files admitted to the build context
 ├── README.md                      Direct Docker/Podman run commands
 ├── docs/                          This guide and rendered/editable diagrams
@@ -27,6 +30,9 @@ source of truth for behavior; the tables describe their current roles.
 | File | Responsibility |
 | --- | --- |
 | [Dockerfile](../Dockerfile) | Build packages/assets/plugin; assemble production and test targets |
+| [Dockerfile generator](../build/render-dockerfiles.py) | Generate the four explicit distro Dockerfiles; `--check` rejects drift |
+| [Distribution package lists](../build/packages/) | Separate runtime/browser/input/capture dependencies for each package manager |
+| [Publishing workflow](../.github/workflows/build-and-publish.yml) | Test AMD64 distro images, retain evidence and publish tested production tags to GHCR |
 | [.dockerignore](../.dockerignore) | Exclude unneeded context, including test artifacts and documentation assets |
 | [config/startkderc](../config/startkderc) | Default Plasma `systemdBoot=false` for the supervised classic session path |
 | [config/kscreenlockerrc](../config/kscreenlockerrc) | Disable automatic locking and locking on resume in the packaged defaults |
@@ -75,12 +81,16 @@ local files in this checkout.
 | [ui-fixture.cpp](../native/ui-fixture.cpp) | Test-only native Qt editor with a UI-triggered Save action |
 | [vnc-benchmark.cpp](../native/vnc-benchmark.cpp) | Test-only native animation and keyboard acknowledgement markers |
 | [krfb-low-latency.patch](../patches/krfb-low-latency.patch) | Upstream KRFB scheduling and changed-region capture fixes |
+| [krfb-existing-output.patch](../patches/krfb-existing-output.patch) | Stream Debian's existing virtual monitor through PipeWire, retaining GPU rendering |
+| [xtest-paced.cpp](../compat/xtest-paced.cpp) | Scoped software-path XTest keyboard compatibility library |
 | [test.sh](../test/test.sh) | Run static, init, unit-definition and boot checks |
 | [check-init.py](../test/check-init.py) | Test the real inherited init framework inside a disposable image instance |
 | [integration.py](../test/integration.py) | Start the mode matrix through the host launcher and preserve evidence |
 | [rfb.py](../test/rfb.py) | Shared RFB client with authentication, screenshots and input events |
 | [capture-vnc.py](../test/capture-vnc.py) | Authenticate and capture substantial framebuffer content |
 | [ui.py](../test/ui.py) | Measure dragging and verify UI text saved through a host file bind |
+| [kiosk.py](../test/kiosk.py) | Validate single-app sessions, actual Chromium, input and restart |
+| [plasma-target-app](../libexec/plasma-target-app) | Validate arguments, configure fullscreen rules and supervise the kiosk app |
 | [performance.py](../test/performance.py) | Drive Chromium/noVNC, measure visible frames and feedback, verify GPU/fallback |
 | [Dockerfile.uid-fixture](../test/Dockerfile.uid-fixture) | Deliberately different account IDs for mapping regressions |
 
@@ -94,8 +104,9 @@ service; the init module selects the values written into `session.env`.
 | --- | --- | --- |
 | `DISPLAY_MODE` | `headless` | One of `headless`, `nested`, `vnc`, `web` |
 | `DISPLAY_BACKEND` | `auto` | One of `auto`, `wayland`, `x11` |
+| `TARGET_APP` | Unset | Executable and quoted arguments; empty keeps the ordinary Plasma session |
 | `DISPLAY_WIDTH`, `DISPLAY_HEIGHT` | `1920`, `1080` | Initial dimensions; validated as 10–9999 |
-| `PLASMA_UID`, `PLASMA_GID` | Current image account IDs | Optional account adjustment; supplied automatically by the nested launcher |
+| `PLASMA_UID`, `PLASMA_GID` | Current image account IDs | Optional account adjustment; launcher supplies host IDs for Docker nested mode and every Podman mode |
 | `HOST_WAYLAND_DISPLAY` | Detected | Absolute mounted path or name relative to the host runtime mount |
 | `HOST_XDG_RUNTIME_DIR` | Host hint from `XDG_RUNTIME_DIR`, otherwise `/run/host/runtime` | Search directory for host Wayland sockets |
 | `HOST_DISPLAY` | Host hint from `DISPLAY`, otherwise detected | Local X11 display whose socket is mounted |
@@ -124,9 +135,15 @@ private and does not reuse the host's runtime as its own.
 | `DBUS_SESSION_BUS_ADDRESS` | Private desktop bus at `unix:path=/run/plasma/bus` |
 | `WAYLAND_DISPLAY` | `wayland-0` for the private Wayland service environment |
 | `PLASMA_X11_DISPLAY` | Private X11 display, normally `:100` |
+| `PLASMA_SOFTWARE_CAPTURE` | `1` selects private Xvfb capture for older KWin's Wayland software mode; Arch retains OpenGL/PipeWire with `0` |
+| `PLASMA_SOFTWARE_DISPLAY` | Private Xvfb parent display for that fallback, normally `:110` |
+| `QT_QUICK_BACKEND` | Set to `software` during software fallback |
+| `XDG_CONFIG_HOME` in kiosk mode | Isolated `/home/plasma/.config/plasma-kiosk` settings/profile directory |
 | `XDG_SESSION_TYPE` | The selected desktop backend |
 | `QT_QPA_PLATFORM` | `wayland` or `xcb` for service clients |
-| `PLASMA_KWIN_INPUT` | Set to `1` by the Wayland VNC helper to select the scoped plugin |
+| `PLASMA_KWIN_INPUT` | Set to `1` by the OpenGL/PipeWire Wayland VNC helper to select the scoped plugin |
+| `PLASMA_VNC_EXISTING_OUTPUT` | Set to `1` for Debian's existing virtual-monitor capture |
+| `XDG_MENU_PREFIX` | `plasma-`, including kiosk's service-metadata bootstrap |
 | `PLASMA_WAIT_TIMEOUT` | Helper-specific probe timeout, normally 60; health checking sets zero for its own probes |
 
 Use `DISPLAY_MODE`/`DISPLAY_BACKEND` for ordinary profile selection. Setting the
@@ -162,6 +179,8 @@ nested mode, so other modes with backend `auto` normally choose Wayland.
 | `/etc/systemd/system/default.target` | Symlink selecting the profile |
 | `/etc/systemd/system/plasma-*.target` | Packaged mode profiles |
 | `/etc/plasma/session.env` | Generated service environment; contains no VNC password value |
+| `/etc/plasma/vnc-existing-output` | Debian capability marker for capture of its existing virtual monitor |
+| `/etc/plasma/opengl-software-capture` | Arch capability marker for Mesa software OpenGL capture |
 | `/etc/plasma/Xauthority` | Private X11 authorization cookie |
 | `/etc/plasma/host-Xauthority` | Normalized private copy of host credentials when supplied |
 | `/etc/plasma/vnc-password` | Private plaintext KRFB credential |
@@ -169,6 +188,7 @@ nested mode, so other modes with backend `auto` normally choose Wayland.
 | `/run/plasma/` | Desktop-owned private runtime directory |
 | `/run/plasma/bus` | Private desktop D-Bus socket |
 | `/run/plasma/wayland-0` | Normal private Wayland socket |
+| `/dev/udmabuf` | Host kernel device used by Arch's KWin for CPU-rendered DMA buffers |
 | `/run/host/wayland` | Optional bind-mounted host Wayland socket |
 | `/run/host/runtime/` | Alternative mount/search location for a host runtime directory |
 | `/run/host/X11/` | Optional read-only host X11 socket directory |
@@ -180,8 +200,9 @@ nested mode, so other modes with backend `auto` normally choose Wayland.
 | TCP 5900 | VNC/RFB server inside the container |
 | TCP 6080 | Websockify HTTP/WebSocket service inside the container |
 
-The `/usr/lib64` plugin path is the path used by this Fedora image. It is not a
-cross-distribution promise about where every Qt installation stores plugins.
+The `/usr/lib64` plugin path above is Fedora's. Debian/Ubuntu use multiarch library
+paths and Arch uses `/usr/lib`. The build derives the path from Qt's pkg-config
+metadata rather than copying Fedora's directory layout to other distributions.
 
 ## Tools and components by responsibility
 
@@ -189,7 +210,7 @@ cross-distribution promise about where every Qt installation stores plugins.
 | --- | --- |
 | Docker / Podman | Build images, create isolation/mounts, start and inspect containers |
 | OCI runtime | Engine-selected low-level process/container setup; the repository does not select a universal runtime implementation |
-| DNF | Resolve and install Fedora packages |
+| DNF / APT / pacman | Resolve and install packages for the selected distribution |
 | `curl`, `tar`, `sha256sum` | Download, verify and extract pinned source/assets |
 | Bash | Init modules, argument construction and small service helpers |
 | `getent`, `id` | Look up accounts/groups and numeric identity |

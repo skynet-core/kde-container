@@ -124,8 +124,9 @@ before it removes its test containers.
 
 ### Using Podman for the walkthrough
 
-Build with `podman build --format docker --layers -t plasma6:local .`, then use the
-complete Podman web command from the [README](../README.md#browser--novnc-1).
+Build with `podman build --format docker --layers -f Dockerfile.fedora-44 -t plasma6:fedora-44 .`, then use the
+complete Podman web command from the [README's Fedora examples](../README.md#fedora-44)
+(expand the Rootless Podman commands).
 The key additions/changes are `--systemd=always --passwd=false --userns=keep-id`
 while retaining `--user=0:0` and the caller's `PLASMA_UID/GID`.
 
@@ -258,7 +259,7 @@ probe does not instantiate and exercise the entire input path.
 ## The basic validation suite
 
 ```bash
-# HOST: validate shell scripts, init behavior, unit definitions and all eight modes.
+# HOST: validate shell scripts, init, units and supported modes (eight; four on Arch).
 bash test/test.sh --capture
 
 # HOST: use Podman's image store and runtime for the same suite.
@@ -437,7 +438,7 @@ docker build --target ui-test -t plasma6:ui-test .
 uv run test/performance.py --image plasma6:ui-test --expect-renderer gpu
 
 # HOST: hide GPU nodes; exercise automatic fallback rather than forcing QPainter.
-uv run test/performance.py --image plasma6:ui-test --no-gpu --expect-renderer software
+uv run test/performance.py --image plasma6:ui-test --no-gpu --expect-renderer software --min-fps 20
 
 # HOST: compare against stock KRFB while retaining functioning input.
 docker build --target ui-perf-baseline -t plasma6:perf-before .
@@ -471,6 +472,41 @@ The source patch lives in [`krfb-low-latency.patch`](../patches/krfb-low-latency
 continuously transmitted. For a slower link, reduce resolution or the fps budget
 and adjust noVNC's Quality/Compression controls. These changes do not require a
 different input protocol.
+
+## Testing application sessions
+
+`TARGET_APP` changes which graphical session starts, so it has a separate test
+matrix in [`test/kiosk.py`](../test/kiosk.py). The test editor and real Chromium
+run as the configured startup applications, rather than being added to an already
+running Plasma desktop.
+
+```bash
+# HOST: test images include the editor; production includes Chromium only.
+docker build --target ui-test -t plasma6:ui-test .
+uv run test/kiosk.py --image plasma6:ui-test
+
+# HOST: test the same application startup through software-only remote capture.
+uv run test/kiosk.py --image plasma6:ui-test --no-gpu --backends wayland --modes vnc web
+
+# HOST: build into the rootless engine's store, then run its full matrix.
+podman build --format docker --layers --target ui-test -t plasma6:ui-test .
+uv run test/kiosk.py --runtime podman --image plasma6:ui-test
+```
+
+The normal matrix contains both apps on all supported display profiles (eight on
+Fedora/Debian/Ubuntu, four Wayland profiles on Arch). Use
+`--modes headless vnc web` on a host without a display socket. Local-mode cases
+check the selected application, one KWin instance and absence of the full Plasma
+session. Remote cases also inspect fullscreen screenshots and send real RFB input.
+The editor saves the exact text into the host-mounted file; the Chromium fixture
+changes a visible status colour only when its input contains the expected text.
+
+Each remote case then kills only its own application process and checks that a
+new app PID appears under the same supervisor, KWin keeps its PID, and the same
+VNC connection sees the replacement fullscreen window. Logs, process lists,
+assertions, host files and screenshots survive under `test/.artifacts/kiosk-*`.
+Keep the ordinary desktop boot suite as a regression check that an unset
+`TARGET_APP` still starts Plasma.
 
 ## Safely following a change through the project
 

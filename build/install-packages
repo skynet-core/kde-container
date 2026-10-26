@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Package lists are copied per stage, keeping unrelated distro/phase caches separate.
+set -euo pipefail
+# shellcheck disable=SC1091
+source /etc/os-release
+phase=${1:?desktop, browser, input-build, or vnc-build required}
+mapfile -t packages < <(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "/build-support/packages/$phase.txt")
+case $ID in
+fedora)
+	dnf install -y "${packages[@]}"
+	dnf clean all
+	;;
+debian | ubuntu)
+	export DEBIAN_FRONTEND=noninteractive
+	if [[ $ID == ubuntu && $phase == browser ]]; then
+		# Only the browser and its JPEG ABI compatibility package come from
+		# Debian's signed archive. Other dependencies are resolved from Ubuntu.
+		packages=(/tmp/chromium-debs/*.deb)
+	fi
+	apt-get update
+	apt-get install -y --no-install-recommends "${packages[@]}"
+	rm -rf /var/lib/apt/lists/* /tmp/chromium-debs
+	;;
+arch)
+	# A rolling system must be updated as a whole, rather than partially upgraded.
+	pacman -Syu --noconfirm --needed "${packages[@]}"
+	pacman -Scc --noconfirm
+	if [[ $phase == desktop ]]; then
+		python -m venv --system-site-packages --without-pip /opt/websockify
+		python -m pip --python /opt/websockify/bin/python install --no-cache-dir --no-deps \
+			--require-hashes -r /build-support/websockify-requirements.txt
+		ln -s /opt/websockify/bin/websockify /usr/local/bin/websockify
+	fi
+	;;
+*)
+	printf 'Unsupported distribution: %s\n' "$ID" >&2
+	exit 1
+	;;
+esac

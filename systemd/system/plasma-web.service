@@ -8,7 +8,7 @@ Type=exec
 User=plasma
 EnvironmentFile=/etc/plasma/session.env
 ExecStartPre=/usr/local/libexec/plasma-wait vnc
-ExecStart=/usr/bin/websockify --web=/opt/noVNC 6080 127.0.0.1:5900
+ExecStart=/usr/bin/env websockify --web=/opt/noVNC 6080 127.0.0.1:5900
 Restart=on-failure
 RestartSec=3
 TimeoutStartSec=75

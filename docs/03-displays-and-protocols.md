@@ -154,9 +154,12 @@ a nested compositor can accidentally connect to its own not-yet-ready X server.
 physical display device.
 
 The image includes Mesa drivers and defaults to `LIBGL_ALWAYS_SOFTWARE=0`, allowing
-GPU rendering. KWin's virtual backend prefers OpenGL when it can open a render
-device, and supports QPainter as a software fallback. Mesa clients can also fall
-back to software when hardware acceleration is unavailable.
+GPU rendering. Init checks render-node access as `plasma`. When no node is usable,
+it writes `LIBGL_ALWAYS_SOFTWARE=1` and `QT_QUICK_BACKEND=software` into the service
+environment. This also allows Qt desktop components to start without GPU EGL.
+KWin uses QPainter when its backend has no render device.
+Current Arch's KWin 6.8 uses Mesa software OpenGL through `/dev/udmabuf` instead;
+see [the host preparation commands](../README.md#rendering-and-vnc-responsiveness).
 
 GPU rendering requires accessible `/dev/dri` devices and compatible drivers. The
 privileged Docker examples expose those devices; rootless Podman still depends on
@@ -164,9 +167,30 @@ host-user access. An environment setting does not grant device permissions. Sett
 `LIBGL_ALWAYS_SOFTWARE=1` requests software rendering from Mesa consumers; inspect
 KWin's support information to establish the actual compositor and driver.
 
-The performance suite's `--no-gpu` option masks `/dev/dri` with an empty tmpfs. It
-verifies that the same desktop and remote UI work through automatic fallback,
-without requiring a GPU or choosing a software renderer in advance.
+KWin's screencast API supports OpenGL compositing and rejects QPainter capture.
+For Wayland VNC/web without a GPU, the conditional
+[`plasma-software-display.service`](../systemd/system/plasma-software-display.service)
+starts a private Xvfb display (normally `:110`). KWin nests its Wayland compositor
+on that X11 parent, using QPainter. x11vnc captures the parent display and sends
+input to KWin's parent window, which forwards it to the native Wayland desktop.
+`x11vnc` disables modifier-state rewriting for this path. A small
+[`XTest compatibility library`](../compat/xtest-paced.cpp), loaded only into this
+software VNC process using `LD_PRELOAD`, gives each keyboard edge at least 5 ms of
+X server time. Fast Shift/Ctrl chords otherwise lose transitions in this nested
+path. The library forwards to the real `XTestFakeKeyEvent` through `RTLD_NEXT`;
+it does not intercept pointer input or frame delivery.
+
+This preserves Wayland applications without requiring GPU-only capture. Local
+headless/nested sessions continue using their normal display paths.
+On current Arch, software capture stays on the OpenGL/PipeWire path using CPU
+rendering and the kernel DMA-buffer device; the private Xvfb path applies to the
+older KWin versions in Fedora, Debian and Ubuntu.
+
+The performance suite's `--no-gpu` option masks `/dev/dri` with an empty tmpfs.
+Rootless Podman imports host devices after tmpfs mounts in privileged mode, so its
+no-GPU test additionally omits privileged device imports and grants systemd's
+capabilities explicitly. The renderer assertion verifies that the test actually
+uses software rendering without choosing a software renderer in advance.
 
 ## Remote video: virtual output to client pixels
 
@@ -176,10 +200,12 @@ without requiring a GPU or choosing a software renderer in advance.
 flow is shown separately below. In web mode, websockify also serves the noVNC files
 pictured in the diagram.
 
-### Wayland: KRFB, KDE screencast and PipeWire
+### Wayland with GPU: KRFB, KDE screencast and PipeWire
 
 `krfb-virtualmonitor` asks KWin to create a virtual monitor named `Plasma`. KWin
-exposes it as `Virtual-Plasma`. The KDE screencast protocol makes its frames
+exposes it as `Virtual-Plasma` on newer KWin. Debian 13 captures its existing
+virtual output because KWin 6.3 cannot add another one to the virtual backend.
+The KDE screencast protocol makes its frames
 available through a PipeWire stream; KRFB turns those frames into VNC framebuffer
 updates.
 
@@ -210,6 +236,11 @@ wallpaper while the panel and windows remain on the other monitor.
 waits for `Virtual-Plasma`, enables and prioritizes it, places it at `(0, 0)`, and
 disables the other active outputs. Its check mode requires exactly one enabled
 output with that name and position.
+
+Debian's existing-output path and software capture keep their sole output instead.
+KScreen versions can omit `enabled` on a new virtual output; the helper also uses
+its assigned output priority when that property is absent, and waits through
+incomplete output discovery.
 
 This output arrangement is also useful for input: RFB coordinates refer to the
 exported monitor, and the sole desktop output starts at the same origin.
@@ -377,7 +408,7 @@ The plugin's connection procedure is:
 
 1. Connect to the private Wayland display named by the service environment.
 2. Read the Wayland registry, which advertises available protocol interfaces.
-3. Require and bind `org_kde_kwin_fake_input` at version 6.
+3. Require `org_kde_kwin_fake_input` version 5 or newer, binding up to version 6.
 4. Send the interface's application/reason request and complete its roundtrip.
 5. Integrate incoming Wayland activity with Qt's event loop using `QSocketNotifier`.
 6. Forward KRFB's input callbacks to the bound KWin protocol object.
@@ -387,7 +418,7 @@ it is separate from the VNC password negotiation. The desktop metadata is what
 allows this executable to see the restricted interface in this setup.
 
 ```cpp
-// Adapted from the project's plugin. m_input is an already-bound protocol object.
+// Simplified v6 path from the plugin. m_input is an already-bound protocol object.
 // State 1 means pressed; 0 means released.
 void handleKeyboard(bool down, rfbKeySym key) override
 {
@@ -414,8 +445,16 @@ through KRFB's event-plugin lookup when the environment/platform checks match.
 
 This links against KRFB's private library API. The checked source headers and
 runtime library must remain compatible. The Wayland input path also requires
-KWin's fake-input v6 interface; failing to find it produces a clear service error
+KWin's fake-input v5 or newer interface; failing to find it produces a clear service error
 rather than silently claiming input is available.
+
+Debian 13 ships an older KWin with fake-input v5. That protocol takes Linux evdev
+keycodes instead of keysyms. The plugin reads KWin's `wl_keyboard` keymap, uses
+libxkbcommon to locate each requested keysym and subtracts the XKB offset of eight
+before sending the keycode. It remembers pressed keys so releases match presses.
+Modifier events still come from the VNC client. Symbols absent from the session's
+keymap are reported and skipped; this path does not implement arbitrary Unicode
+injection. With v6, the direct keysym path above remains in use.
 
 ### Scoped permission and connection lifetime
 

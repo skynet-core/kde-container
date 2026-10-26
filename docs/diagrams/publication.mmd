@@ -1,0 +1,15 @@
+flowchart TD
+    event["Push / pull request / manual run"] --> matrix["Four distro jobs: Fedora, Debian, Ubuntu, Arch"]
+    template["Dockerfile template + distro package lists"] --> generated["Check generated Dockerfiles"]
+    matrix --> generated
+    generated --> production["Build and load production image: linux/amd64"]
+    production --> boot["Check init / units; boot headless, VNC and web"]
+    boot --> fixtures["Build ui-test with editor and benchmark"]
+    fixtures --> ui["Mouse drag + screenshots + host file typing + Chromium kiosk"]
+    ui --> policy{"All checks pass and publication enabled?"}
+    policy -->|yes| login["GHCR login with repository token"]
+    login --> push["Retag and push tested production image"]
+    policy -->|no| stop["No publication"]
+    push --> tags["Distro + commit / release tags; Fedora owns latest"]
+    boot -. "always retain evidence" .-> artifacts["Journals, screenshots and host files: 14 days"]
+    ui -. "always retain evidence" .-> artifacts

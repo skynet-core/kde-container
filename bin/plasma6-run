@@ -17,10 +17,12 @@ args=(run --rm --name "${CONTAINER_NAME:-plasma6}" --user=0:0 --privileged --cgr
 	-e "DISPLAY_MODE=$mode" -e "DISPLAY_BACKEND=$backend"
 	-e "DISPLAY_WIDTH=${DISPLAY_WIDTH:-1920}" -e "DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-1080}")
 args+=(-e "VNC_MAX_FPS=${VNC_MAX_FPS:-60}")
+if [[ -n ${TARGET_APP:-} ]]; then args+=(-e "TARGET_APP=$TARGET_APP"); fi
 if [[ $engine == podman ]]; then
 	# The inherited entrypoint is a shell script, so force systemd mount setup.
-	args+=(--systemd=always --passwd=false --health-cmd=/usr/local/bin/plasma-healthcheck
+	args+=(--systemd=always --passwd=false --userns=keep-id --health-cmd=/usr/local/bin/plasma-healthcheck
 		--health-interval=10s --health-timeout=5s --health-start-period=90s --health-retries=6)
+	args+=(-e "PLASMA_UID=${PLASMA_UID:-$(id -u)}" -e "PLASMA_GID=${PLASMA_GID:-$(id -g)}")
 fi
 
 if [[ $mode == nested ]]; then
@@ -30,12 +32,10 @@ if [[ $mode == nested ]]; then
 		exit 1
 		;;
 	esac
-	if [[ $engine == podman ]]; then
-		args+=(--userns=keep-id)
-	else
+	if [[ $engine == docker ]]; then
 		args+=(--userns=host)
+		args+=(-e "PLASMA_UID=${PLASMA_UID:-$(id -u)}" -e "PLASMA_GID=${PLASMA_GID:-$(id -g)}")
 	fi
-	args+=(-e "PLASMA_UID=${PLASMA_UID:-$(id -u)}" -e "PLASMA_GID=${PLASMA_GID:-$(id -g)}")
 	wayland_socket=${WAYLAND_DISPLAY:-}
 	if [[ -n $wayland_socket && $wayland_socket != /* ]]; then
 		wayland_socket=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$wayland_socket
@@ -65,7 +65,7 @@ if [[ $mode == nested ]]; then
 	fi
 fi
 
-if [[ $mode != nested ]]; then
+if [[ $mode != nested && $engine != podman ]]; then
 	if [[ -n ${PLASMA_UID:-} ]]; then args+=(-e "PLASMA_UID=$PLASMA_UID"); fi
 	if [[ -n ${PLASMA_GID:-} ]]; then args+=(-e "PLASMA_GID=$PLASMA_GID"); fi
 fi

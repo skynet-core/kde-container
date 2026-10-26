@@ -37,7 +37,13 @@ def ready(kind):
                 ).returncode
                 == 0
             )
-        if kind == "desktop":
+        if kind in ("desktop", "compositor"):
+            kiosk = bool(os.environ.get("TARGET_APP"))
+            service = (
+                "org.kde.KWin"
+                if kind == "compositor" or kiosk
+                else "org.kde.plasmashell"
+            )
             result = subprocess.run(
                 [
                     "dbus-send",
@@ -46,13 +52,23 @@ def ready(kind):
                     "--dest=org.freedesktop.DBus",
                     "/org/freedesktop/DBus",
                     "org.freedesktop.DBus.NameHasOwner",
-                    "string:org.kde.plasmashell",
+                    f"string:{service}",
                 ],
                 capture_output=True,
                 timeout=2,
                 check=False,
             )
-            return result.returncode == 0 and b"boolean true" in result.stdout
+            ready = result.returncode == 0 and b"boolean true" in result.stdout
+            if ready and kind == "desktop" and kiosk:
+                return (
+                    subprocess.run(
+                        ["/usr/local/libexec/plasma-target-app", "--check"],
+                        timeout=2,
+                        check=False,
+                    ).returncode
+                    == 0
+                )
+            return ready
         raise ValueError(f"Unknown probe: {kind}")
     except (OSError, subprocess.TimeoutExpired):
         return False

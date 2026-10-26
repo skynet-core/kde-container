@@ -12,6 +12,7 @@ need Node.js, Chromium or a Mermaid plugin just to read the checked-in diagrams.
 | --- | --- | --- | --- |
 | Architecture | Shared kernel, container services and display destinations | [Mermaid](architecture.mmd) | [Image](architecture.svg) |
 | Build stages | Inheritance versus copied build artifacts | [Mermaid](build-stages.mmd) | [Image](build-stages.svg) |
+| Publication | Distro matrix, GUI validation and GHCR tags | [Mermaid](publication.mmd) | [Image](publication.svg) |
 | Boot | Init modules, `exec`, PID 1 and target activation | [Mermaid](boot.mmd) | [Image](boot.svg) |
 | Mode selection | Host transport, requested backend and nested validation | [Mermaid](mode-selection.mmd) | [Image](mode-selection.svg) |
 | Service order | Wayland web project's service ordering | [Mermaid](service-order.mmd) | [Image](service-order.svg) |
@@ -22,6 +23,7 @@ need Node.js, Chromium or a Mermaid plugin just to read the checked-in diagrams.
 | Input | Client events through the correct desktop input path | [Mermaid](remote-input.mmd) | [Image](remote-input.svg) |
 | RFB handshake | Negotiation, authentication, pixels and input | [Mermaid](rfb-handshake.mmd) | [Image](rfb-handshake.svg) |
 | UI test | Screenshot-based drag and UI save through a host file mount | [Mermaid](ui-test.mmd) | [Image](ui-test.svg) |
+| Kiosk | Optional application session, fullscreen configuration and restart | [Mermaid](kiosk.mmd) | [Image](kiosk.svg) |
 
 ## Reading the arrows
 

@@ -1,6 +1,9 @@
 flowchart TD
     kwin["KWin virtual output"] -->|"KDE screencast stream"| pw["PipeWire frames"]
+    modern["Arch CPU rendering: Mesa and udmabuf"] --> kwin
     pw --> krfb["KRFB virtual monitor"]
+    soft["No GPU: KWin Wayland with QPainter"] -->|"private parent X11 window"| parent["Private Xvfb display :110"]
+    parent --> x11vnc
     xvfb["Xvfb display"] --> x11vnc["x11vnc"]
     krfb --> rfb["RFB server on TCP 5900"]
     x11vnc --> rfb

@@ -5,22 +5,137 @@ For a commented, diagram-led explanation of the project, read
 The guide covers Linux containers, image builds, boot and systemd, all display
 paths, remote input, UID mapping, troubleshooting, and the UI regression tests.
 
-Fedora 44 Plasma 6 desktop on
-[`ghcr.io/skynet-core/systemd:fedora-44`](https://github.com/skynet-core/systemd).
+Plasma 6 desktops on every distribution image from
+[`skynet-core/systemd`](https://github.com/skynet-core/systemd), with Fedora 44 as the default.
 Systemd runs as PID 1; the desktop, private D-Bus and remote-access services run as
 `plasma`. Docker with a rootful daemon and rootless Podman on Linux/cgroup v2 are
 supported. The commands below run containers directly, without a host launcher.
 
+[Build](#build) · [Preparation](#before-running-the-examples) · [Fedora](#fedora-44) · [Debian](#debian-13) · [Ubuntu](#ubuntu-2604) · [Arch](#arch-linux) · [Validation](#validation)
+
 ## Build
 
+| Dockerfile | Systemd base tag | Desktop backends |
+| --- | --- | --- |
+| `Dockerfile` / `Dockerfile.fedora-44` | `fedora-44` | Wayland and X11 |
+| `Dockerfile.debian-13` | `debian-13` | Wayland and X11 |
+| `Dockerfile.ubuntu-26.04` | `ubuntu-26.04` | Wayland and X11 |
+| `Dockerfile.archlinux` | `archlinux` | Wayland only; current rolling Arch has removed the Plasma X11 session |
+
+Each base is `ghcr.io/skynet-core/systemd:<tag>`. All variants share the same init
+modules, services, GPU preference, remote input fixes and optional kiosk session.
+
+### Build with Docker
+
 ```bash
-docker build -t plasma6:local .
-# Or build into Podman's separate image store:
-podman build --format docker --layers -t plasma6:local .
+# Fedora 44
+docker build -f Dockerfile.fedora-44 -t plasma6:fedora-44 .
+# Debian 13
+docker build -f Dockerfile.debian-13 -t plasma6:debian-13 .
+# Ubuntu 26.04
+docker build -f Dockerfile.ubuntu-26.04 -t plasma6:ubuntu-26.04 .
+# Arch Linux
+docker build -f Dockerfile.archlinux -t plasma6:archlinux .
+```
+
+### Build with Podman
+
+```bash
+# Fedora 44
+podman build --format docker --layers -f Dockerfile.fedora-44 -t plasma6:fedora-44 .
+# Debian 13
+podman build --format docker --layers -f Dockerfile.debian-13 -t plasma6:debian-13 .
+# Ubuntu 26.04
+podman build --format docker --layers -f Dockerfile.ubuntu-26.04 -t plasma6:ubuntu-26.04 .
+# Arch Linux
+podman build --format docker --layers -f Dockerfile.archlinux -t plasma6:archlinux .
+```
+
+Choose the distribution you want to run. Each run example below uses its explicit
+`plasma6:<distro>` tag. The unqualified Dockerfile still builds Fedora; to keep
+the default image name used by the optional launcher:
+
+```bash
+docker tag plasma6:fedora-44 plasma6:local
+podman tag plasma6:fedora-44 plasma6:local
 ```
 
 Podman's `--format docker` preserves the image health check. For an OCI import that
 has lost its health metadata, add `--health-cmd=/usr/local/bin/plasma-healthcheck`.
+
+Ubuntu's native `chromium-browser` package is a Snap launcher. Its Dockerfile instead
+fetches Chromium, its common files, sandbox helper and JPEG ABI package from
+Debian's signed APT archive in a separate stage. Remaining dependencies come from
+Ubuntu; no Debian repository is added to the Ubuntu image. Arch uses native desktop
+packages and a dedicated Python environment for checksum-pinned websockify.
+Debian's older KWin streams its existing virtual monitor through PipeWire;
+newer releases create the additional `Virtual-Plasma` monitor. Both support GPU
+rendering and automatic software fallback.
+
+### GitHub Actions and GHCR
+
+[Build, test and publish](.github/workflows/build-and-publish.yml) builds all four
+variants for `linux/amd64` on pushes to `main`, `v*` tags, pull requests and manual
+runs. It checks init and systemd units, boots the supported headless/VNC/web modes,
+then tests window dragging, text saved through a host mount, and Chromium kiosk
+input/restart. Hosted runners have no desktop socket, so nested tests remain local.
+Per-case journals, screenshots and output files are retained as workflow artifacts.
+
+Successful pushes and manual runs with `publish=true` push the **tested production
+image** to `ghcr.io/<owner>/<repository>` using `GITHUB_TOKEN` with `packages: write`.
+Pull requests never publish. For this repository the destination is
+`ghcr.io/skynet-core/kde-container`:
+
+| Trigger | Published tags |
+| --- | --- |
+| `main` | `fedora-44`, `debian-13`, `ubuntu-26.04`, `archlinux`; `latest` aliases Fedora |
+| Any publishing run | `sha-<full-commit-sha>-<distro>` |
+| Version tag, for example `v1.0.0` | `v1.0.0-<distro>` |
+
+After a successful publishing workflow, pull and give each image the local
+tag used by the run examples. Use the engine you intend to run it with;
+Docker and Podman have separate image stores.
+
+```bash
+# Docker: download published images; no local build is needed.
+# Fedora 44
+docker pull ghcr.io/skynet-core/kde-container:fedora-44
+docker tag ghcr.io/skynet-core/kde-container:fedora-44 plasma6:fedora-44
+# Debian 13
+docker pull ghcr.io/skynet-core/kde-container:debian-13
+docker tag ghcr.io/skynet-core/kde-container:debian-13 plasma6:debian-13
+# Ubuntu 26.04
+docker pull ghcr.io/skynet-core/kde-container:ubuntu-26.04
+docker tag ghcr.io/skynet-core/kde-container:ubuntu-26.04 plasma6:ubuntu-26.04
+# Arch Linux
+docker pull ghcr.io/skynet-core/kde-container:archlinux
+docker tag ghcr.io/skynet-core/kde-container:archlinux plasma6:archlinux
+```
+
+```bash
+# Podman: download published images; no local build is needed.
+# Fedora 44
+podman pull ghcr.io/skynet-core/kde-container:fedora-44
+podman tag ghcr.io/skynet-core/kde-container:fedora-44 plasma6:fedora-44
+# Debian 13
+podman pull ghcr.io/skynet-core/kde-container:debian-13
+podman tag ghcr.io/skynet-core/kde-container:debian-13 plasma6:debian-13
+# Ubuntu 26.04
+podman pull ghcr.io/skynet-core/kde-container:ubuntu-26.04
+podman tag ghcr.io/skynet-core/kde-container:ubuntu-26.04 plasma6:ubuntu-26.04
+# Arch Linux
+podman pull ghcr.io/skynet-core/kde-container:archlinux
+podman tag ghcr.io/skynet-core/kde-container:archlinux plasma6:archlinux
+```
+
+```bash
+# Maintainers: edit Dockerfile and build/packages/<family>/*.txt, then regenerate.
+python3 build/render-dockerfiles.py
+python3 build/render-dockerfiles.py --check
+```
+
+See [the build and publishing guide](docs/02-build-and-boot.md#distribution-variants-and-publication)
+for package phases, caching and the publication flow.
 
 ## Display modes
 
@@ -28,84 +143,167 @@ has lost its health metadata, add `--health-cmd=/usr/local/bin/plasma-healthchec
 | --- | --- | --- | --- |
 | `wayland` | `nested` | `plasma-wayland-nested.target` | KWin in a host display window |
 | `wayland` | `headless` | `plasma-wayland-headless.target` | KWin virtual framebuffer |
-| `wayland` | `vnc` | `plasma-wayland-vnc.target` | KWin virtual monitor, PipeWire, WirePlumber, KRFB with KWin input |
+| `wayland` | `vnc` | `plasma-wayland-vnc.target` | OpenGL: KWin output, PipeWire, KRFB; older KWin software: private Xvfb and x11vnc; Arch software: Mesa/udmabuf and KRFB |
 | `wayland` | `web` | `plasma-wayland-web.target` | Wayland VNC services plus noVNC/websockify |
 | `x11` | `nested` | `plasma-x11-nested.target` | Rootful Xwayland on a Wayland host, or Xephyr on an X11 host |
 | `x11` | `headless` | `plasma-x11-headless.target` | Xvfb and KWin X11 |
 | `x11` | `vnc` | `plasma-x11-vnc.target` | Xvfb, KWin X11 and x11vnc |
 | `x11` | `web` | `plasma-x11-web.target` | X11 VNC services plus noVNC/websockify |
 
-All modes start a full Plasma session and private session bus. Headless and nested
+With `TARGET_APP` unset, all modes start a full Plasma session and private session bus. Headless and nested
 modes start no remote listener. Set `DISPLAY_BACKEND=x11` in any command below for
-its X11 variant; the remote/headless examples use `wayland` explicitly.
+its X11 variant on Fedora, Debian or Ubuntu; Arch supports the four Wayland rows.
+The per-distribution examples spell out each supported backend.
+Arch includes Xwayland for legacy applications within its Wayland session.
 
 `DISPLAY_BACKEND=auto` checks mounted Unix sockets, preferring Wayland over X11;
 with neither it selects Wayland. Docker and Podman cannot mount host sockets from
 inside the container, so nested mode needs the mounts shown below. If both host
 socket types are mounted, Wayland has priority. Host transport and desktop backend
 are independent: either desktop backend can nest on either host display.
+On Arch, `auto` always chooses a Wayland desktop, including when nesting through
+an X11 host socket. An explicit `DISPLAY_BACKEND=x11` fails with a clear message.
 
-## Docker commands
+## Before running the examples
 
-These commands keep PID 1 as root, use a private cgroup namespace, and allow enough
-processes and shared memory for Plasma. Runtime `PLASMA_UID/GID` make the desktop
-account match your user without rebuilding the image. Use a different container
-name or stop the previous container before reusing a name.
+Run these commands as your desktop user on a Linux host with cgroup v2. Docker
+examples use a rootful daemon; Podman runs rootless. Choose one run command
+at a time: VNC examples share host port `5900` and browser/kiosk examples share
+`6080`. Stop the previous remote container before reusing its port, or change the
+host side of `-p`, for example `127.0.0.1:6081:6080`.
 
-### Headless
+### Password for VNC, web and web kiosk
+
+Create the password file in the directory where you will run the commands.
+Replace `changeit` with your chosen 1–8 printable ASCII character password; VNC
+authentication has an eight-character limit.
+
+```bash
+# HOST: the run commands mount this file read-only into the container.
+(umask 077; printf '%s\n' 'changeit' > ./vnc-password)
+chmod 600 ./vnc-password
+```
+
+Connect a VNC viewer to `127.0.0.1:5900`, or open
+`http://127.0.0.1:6080/vnc.html` for web/kiosk mode and enter this password.
+Headless and nested modes need no password and start no remote listener.
+
+### Host socket for nested mode
+
+For a Wayland host, prepare the socket path used by every Wayland-host example:
+
+```bash
+# Most desktop sessions export a name such as wayland-0.
+export HOST_WAYLAND_SOCKET="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+test -S "$HOST_WAYLAND_SOCKET"
+```
+
+If `WAYLAND_DISPLAY` already contains an absolute path, use
+`export HOST_WAYLAND_SOCKET="$WAYLAND_DISPLAY"` instead. For an X11 host, the
+examples mount `/tmp/.X11-unix` and `${XAUTHORITY:-$HOME/.Xauthority}`; set
+`XAUTHORITY` to your active cookie file if that default is not correct.
+
+The commands select the container backend explicitly. `DISPLAY_BACKEND=auto`
+instead follows the mounted host transport, preferring Wayland when both socket
+types are mounted. Arch always selects a Wayland session. To expose both host
+transports, combine the Wayland mount/environment with the X11 mounts/environment
+from the nested examples.
+
+### Arch on a host without a GPU
+
+Before running Arch without an accessible GPU, prepare `/dev/udmabuf` using
+[the software-rendering instructions](#rendering-and-vnc-responsiveness).
+The privileged examples expose available host devices automatically. Podman's
+desktop user must also have host permission to open them.
+
+## Single application / kiosk
+
+Set `TARGET_APP` to run one fullscreen application under KWin instead of starting
+the Plasma desktop, panels, splash screen and desktop autostart programs. Leave
+it unset or empty to retain the normal KDE Plasma session. This works with every
+supported profile: eight on Fedora/Debian/Ubuntu and four Wayland profiles on
+Arch, including GPU rendering and software fallback.
+
+Chromium is included. `TARGET_APP=chromium` starts it with kiosk and first-run
+suppression flags, using the selected Wayland/X11 backend. Without a URL it opens
+`about:blank`. The kiosk examples open `https://example.org`; replace that URL
+with the page you want to display.
+
+Complete Chromium commands for Docker and Podman are included in each
+distribution section: [Fedora](#fedora-44), [Debian](#debian-13),
+[Ubuntu](#ubuntu-2604) and [Arch](#arch-linux). Add `-e TARGET_APP=chromium`
+or `-e TARGET_APP=konsole` before the image name in any other mode example
+to run that application there.
+
+Open `http://127.0.0.1:6080/vnc.html` and authenticate. For another application,
+supply an installed executable/foreground
+launcher with quoted arguments. Command strings are split into arguments without
+shell evaluation: pipes, redirects, `$VAR` and command substitutions are not
+expanded. For a shell workflow, put it in an executable launcher script and use
+`exec` for its foreground GUI process.
+
+KWin rules make normal application windows fullscreen; application dialogs can
+still appear. Chromium also receives its own `--kiosk` flag. The application
+restarts after exit/crash, with a two-second delay; KWin and VNC remain running.
+Kiosk settings and application profiles use `/home/plasma/.config/plasma-kiosk`,
+separate from the ordinary desktop configuration. Health checks require KWin and
+the live application process instead of waiting for `plasmashell`.
+
+## Run examples for every distribution
+
+Each command starts the full KDE Plasma desktop unless it includes
+`TARGET_APP`. Container names include the distribution (Fedora keeps the
+short default names). Run the [preparation steps](#before-running-the-examples)
+first, then expand the engine you use.
+
+| Distribution | Local image used below | Desktop profiles |
+| --- | --- | --- |
+| [Fedora 44](#fedora-44) | `plasma6:fedora-44` | Wayland and X11: nested, headless, VNC, web |
+| [Debian 13](#debian-13) | `plasma6:debian-13` | Wayland and X11: nested, headless, VNC, web |
+| [Ubuntu 26.04](#ubuntu-2604) | `plasma6:ubuntu-26.04` | Wayland and X11: nested, headless, VNC, web |
+| [Arch Linux](#arch-linux) | `plasma6:archlinux` | Wayland: nested, headless, VNC, web |
+
+### Fedora 44
+
+<details>
+<summary>Docker: Fedora 44 desktop and Chromium kiosk commands</summary>
+
+**Wayland headless**
 
 ```bash
 docker run -d --rm --name plasma6-headless \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:local
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:fedora-44
 ```
 
-### Nested on a Wayland host
-
-The standard host variables `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` identify the
-socket. This example assumes `WAYLAND_DISPLAY` is a socket name such as `wayland-0`;
-if it is an absolute path, use that path directly as the mount source.
+**Wayland nested on a Wayland host**
 
 ```bash
 docker run -d --rm --name plasma6-nested \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount "type=bind,source=$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY,target=/run/host/wayland,readonly" \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
   -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=auto -e DISPLAY_MODE=nested plasma6:local
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:fedora-44
 ```
 
-Use `DISPLAY_BACKEND=x11` in the same command to nest a Plasma X11 session through
-rootful Xwayland on the host's Wayland display.
-
-### Nested on an X11 host
-
-Mount the host socket directory and its authentication file. Set `XAUTHORITY` to
-the active host cookie file if your session does not already export it.
+**Wayland nested on an X11 host**
 
 ```bash
-docker run -d --rm --name plasma6-nested \
+docker run -d --rm --name plasma6-wayland-on-x11 \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
   --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
   --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
   -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=auto -e DISPLAY_MODE=nested plasma6:local
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:fedora-44
 ```
 
-Here `auto` selects X11. Set `DISPLAY_BACKEND=wayland` for KWin Wayland nested on
-that X11 host. To expose both host transports for auto-detection, combine the
-Wayland socket mount/environment with these X11 mounts/environment.
-
-### VNC
-
-First create `./vnc-password` containing your chosen 1–8 printable ASCII character
-password and restrict its permissions with `chmod 600 ./vnc-password`. VNC has an
-eight-character authentication limit; no default password is built into the image.
+**Wayland VNC**
 
 ```bash
 docker run -d --rm --name plasma6-vnc \
@@ -115,14 +313,10 @@ docker run -d --rm --name plasma6-vnc \
   -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=vnc \
-  -p 127.0.0.1:5900:5900 plasma6:local
+  -p 127.0.0.1:5900:5900 plasma6:fedora-44
 ```
 
-Connect a VNC client to `127.0.0.1:5900`. Replace `DISPLAY_BACKEND=wayland` with
-`DISPLAY_BACKEND=x11` for the X11 desktop. Mouse and keyboard control are supported
-on both backends.
-
-### Browser / noVNC
+**Wayland browser / noVNC**
 
 ```bash
 docker run -d --rm --name plasma6-web \
@@ -132,21 +326,104 @@ docker run -d --rm --name plasma6-web \
   -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
-  -p 127.0.0.1:6080:6080 plasma6:local
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44
 ```
 
-Open `http://127.0.0.1:6080/vnc.html` and enter the VNC password. The browser sends
-keyboard and pointer events through the same VNC input path. Only port 6080 needs
-to be published for web mode. Use `DISPLAY_BACKEND=x11` for its X11 variant.
+**X11 headless**
 
-## Rootless Podman commands
+```bash
+docker run -d --rm --name plasma6-x11-headless \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=headless plasma6:fedora-44
+```
 
-Run these as your desktop user, without `sudo`. `--systemd=always` sets up systemd
-mounts despite the shell entrypoint; `--user=0:0` keeps systemd as container root.
-`--userns=keep-id` maps your host IDs into the container, and `--passwd=false`
-prevents a synthetic host account from conflicting with the `plasma` account.
+**X11 nested on a Wayland host**
 
-### Headless
+```bash
+docker run -d --rm --name plasma6-x11-on-wayland \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:fedora-44
+```
+
+**X11 nested on an X11 host**
+
+```bash
+docker run -d --rm --name plasma6-x11-nested \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:fedora-44
+```
+
+**X11 VNC**
+
+```bash
+docker run -d --rm --name plasma6-x11-vnc \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:fedora-44
+```
+
+**X11 browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-x11-web \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+```
+
+**Chromium kiosk: Wayland, browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-chromium-wayland \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+```
+
+**Chromium kiosk: X11, browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-chromium-x11 \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+```
+
+</details>
+
+<details>
+<summary>Rootless Podman: Fedora 44 desktop and Chromium kiosk commands</summary>
+
+**Wayland headless**
 
 ```bash
 podman run -d --rm --name plasma6-headless \
@@ -154,26 +431,26 @@ podman run -d --rm --name plasma6-headless \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
   --tmpfs /run --tmpfs /tmp:mode=1777 \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:local
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:fedora-44
 ```
 
-### Nested on a Wayland host
+**Wayland nested on a Wayland host**
 
 ```bash
 podman run -d --rm --name plasma6-nested \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
   --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount "type=bind,source=$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY,target=/run/host/wayland,readonly" \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
   -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=auto -e DISPLAY_MODE=nested plasma6:local
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:fedora-44
 ```
 
-### Nested on an X11 host
+**Wayland nested on an X11 host**
 
 ```bash
-podman run -d --rm --name plasma6-nested \
+podman run -d --rm --name plasma6-wayland-on-x11 \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
   --tmpfs /run --tmpfs /tmp:mode=1777 \
@@ -181,13 +458,10 @@ podman run -d --rm --name plasma6-nested \
   --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
   -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=auto -e DISPLAY_MODE=nested plasma6:local
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:fedora-44
 ```
 
-As with Docker, either nested command accepts `DISPLAY_BACKEND=wayland|x11` to
-choose the desktop backend independently of the host transport.
-
-### VNC
+**Wayland VNC**
 
 ```bash
 podman run -d --rm --name plasma6-vnc \
@@ -198,10 +472,10 @@ podman run -d --rm --name plasma6-vnc \
   -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=vnc \
-  -p 127.0.0.1:5900:5900 plasma6:local
+  -p 127.0.0.1:5900:5900 plasma6:fedora-44
 ```
 
-### Browser / noVNC
+**Wayland browser / noVNC**
 
 ```bash
 podman run -d --rm --name plasma6-web \
@@ -212,12 +486,926 @@ podman run -d --rm --name plasma6-web \
   -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
-  -p 127.0.0.1:6080:6080 plasma6:local
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44
 ```
 
-The VNC endpoint is `127.0.0.1:5900`; the browser URL is
-`http://127.0.0.1:6080/vnc.html`. Set `DISPLAY_BACKEND=x11` in either command for the
-X11 variant.
+**X11 headless**
+
+```bash
+podman run -d --rm --name plasma6-x11-headless \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=headless plasma6:fedora-44
+```
+
+**X11 nested on a Wayland host**
+
+```bash
+podman run -d --rm --name plasma6-x11-on-wayland \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:fedora-44
+```
+
+**X11 nested on an X11 host**
+
+```bash
+podman run -d --rm --name plasma6-x11-nested \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:fedora-44
+```
+
+**X11 VNC**
+
+```bash
+podman run -d --rm --name plasma6-x11-vnc \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:fedora-44
+```
+
+**X11 browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-x11-web \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+```
+
+**Chromium kiosk: Wayland, browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-chromium-wayland \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+```
+
+**Chromium kiosk: X11, browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-chromium-x11 \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+```
+
+</details>
+
+### Debian 13
+
+<details>
+<summary>Docker: Debian 13 desktop and Chromium kiosk commands</summary>
+
+**Wayland headless**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-headless \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:debian-13
+```
+
+**Wayland nested on a Wayland host**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-nested \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:debian-13
+```
+
+**Wayland nested on an X11 host**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-wayland-on-x11 \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:debian-13
+```
+
+**Wayland VNC**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-vnc \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:debian-13
+```
+
+**Wayland browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-web \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:debian-13
+```
+
+**X11 headless**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-x11-headless \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=headless plasma6:debian-13
+```
+
+**X11 nested on a Wayland host**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-x11-on-wayland \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:debian-13
+```
+
+**X11 nested on an X11 host**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-x11-nested \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:debian-13
+```
+
+**X11 VNC**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-x11-vnc \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:debian-13
+```
+
+**X11 browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-x11-web \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:debian-13
+```
+
+**Chromium kiosk: Wayland, browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-chromium-wayland \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:debian-13
+```
+
+**Chromium kiosk: X11, browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-debian-13-chromium-x11 \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:debian-13
+```
+
+</details>
+
+<details>
+<summary>Rootless Podman: Debian 13 desktop and Chromium kiosk commands</summary>
+
+**Wayland headless**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-headless \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:debian-13
+```
+
+**Wayland nested on a Wayland host**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-nested \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:debian-13
+```
+
+**Wayland nested on an X11 host**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-wayland-on-x11 \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:debian-13
+```
+
+**Wayland VNC**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-vnc \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:debian-13
+```
+
+**Wayland browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-web \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:debian-13
+```
+
+**X11 headless**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-x11-headless \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=headless plasma6:debian-13
+```
+
+**X11 nested on a Wayland host**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-x11-on-wayland \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:debian-13
+```
+
+**X11 nested on an X11 host**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-x11-nested \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:debian-13
+```
+
+**X11 VNC**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-x11-vnc \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:debian-13
+```
+
+**X11 browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-x11-web \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:debian-13
+```
+
+**Chromium kiosk: Wayland, browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-chromium-wayland \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:debian-13
+```
+
+**Chromium kiosk: X11, browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-debian-13-chromium-x11 \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:debian-13
+```
+
+</details>
+
+### Ubuntu 26.04
+
+<details>
+<summary>Docker: Ubuntu 26.04 desktop and Chromium kiosk commands</summary>
+
+**Wayland headless**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-headless \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:ubuntu-26.04
+```
+
+**Wayland nested on a Wayland host**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-nested \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:ubuntu-26.04
+```
+
+**Wayland nested on an X11 host**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-wayland-on-x11 \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:ubuntu-26.04
+```
+
+**Wayland VNC**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-vnc \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:ubuntu-26.04
+```
+
+**Wayland browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-web \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+```
+
+**X11 headless**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-x11-headless \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=headless plasma6:ubuntu-26.04
+```
+
+**X11 nested on a Wayland host**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-x11-on-wayland \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:ubuntu-26.04
+```
+
+**X11 nested on an X11 host**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-x11-nested \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:ubuntu-26.04
+```
+
+**X11 VNC**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-x11-vnc \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:ubuntu-26.04
+```
+
+**X11 browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-x11-web \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+```
+
+**Chromium kiosk: Wayland, browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-chromium-wayland \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+```
+
+**Chromium kiosk: X11, browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-ubuntu-26.04-chromium-x11 \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+```
+
+</details>
+
+<details>
+<summary>Rootless Podman: Ubuntu 26.04 desktop and Chromium kiosk commands</summary>
+
+**Wayland headless**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-headless \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:ubuntu-26.04
+```
+
+**Wayland nested on a Wayland host**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-nested \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:ubuntu-26.04
+```
+
+**Wayland nested on an X11 host**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-wayland-on-x11 \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:ubuntu-26.04
+```
+
+**Wayland VNC**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-vnc \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:ubuntu-26.04
+```
+
+**Wayland browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-web \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+```
+
+**X11 headless**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-x11-headless \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=headless plasma6:ubuntu-26.04
+```
+
+**X11 nested on a Wayland host**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-x11-on-wayland \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:ubuntu-26.04
+```
+
+**X11 nested on an X11 host**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-x11-nested \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:ubuntu-26.04
+```
+
+**X11 VNC**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-x11-vnc \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:ubuntu-26.04
+```
+
+**X11 browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-x11-web \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+```
+
+**Chromium kiosk: Wayland, browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-chromium-wayland \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+```
+
+**Chromium kiosk: X11, browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-ubuntu-26.04-chromium-x11 \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+```
+
+</details>
+
+### Arch Linux
+
+This rolling image supports a Wayland desktop on either host transport.
+`DISPLAY_BACKEND=x11` is unsupported. For a host without a GPU, prepare
+[udmabuf](#arch-on-a-host-without-a-gpu) first.
+
+<details>
+<summary>Docker: Arch Linux desktop and Chromium kiosk commands</summary>
+
+**Wayland headless**
+
+```bash
+docker run -d --rm --name plasma6-archlinux-headless \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:archlinux
+```
+
+**Wayland nested on a Wayland host**
+
+```bash
+docker run -d --rm --name plasma6-archlinux-nested \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:archlinux
+```
+
+**Wayland nested on an X11 host**
+
+```bash
+docker run -d --rm --name plasma6-archlinux-wayland-on-x11 \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:archlinux
+```
+
+**Wayland VNC**
+
+```bash
+docker run -d --rm --name plasma6-archlinux-vnc \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:archlinux
+```
+
+**Wayland browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-archlinux-web \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:archlinux
+```
+
+**Chromium kiosk: Wayland, browser / noVNC**
+
+```bash
+docker run -d --rm --name plasma6-archlinux-chromium-wayland \
+  --privileged --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:archlinux
+```
+
+</details>
+
+<details>
+<summary>Rootless Podman: Arch Linux desktop and Chromium kiosk commands</summary>
+
+**Wayland headless**
+
+```bash
+podman run -d --rm --name plasma6-archlinux-headless \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=headless plasma6:archlinux
+```
+
+**Wayland nested on a Wayland host**
+
+```bash
+podman run -d --rm --name plasma6-archlinux-nested \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
+  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:archlinux
+```
+
+**Wayland nested on an X11 host**
+
+```bash
+podman run -d --rm --name plasma6-archlinux-wayland-on-x11 \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:archlinux
+```
+
+**Wayland VNC**
+
+```bash
+podman run -d --rm --name plasma6-archlinux-vnc \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=vnc \
+  -p 127.0.0.1:5900:5900 plasma6:archlinux
+```
+
+**Wayland browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-archlinux-web \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -p 127.0.0.1:6080:6080 plasma6:archlinux
+```
+
+**Chromium kiosk: Wayland, browser / noVNC**
+
+```bash
+podman run -d --rm --name plasma6-archlinux-chromium-wayland \
+  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
+  --cgroupns=private --pids-limit=8192 --shm-size=512m \
+  --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
+  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
+  -e TARGET_APP='chromium https://example.org' \
+  -p 127.0.0.1:6080:6080 plasma6:archlinux
+```
+
+</details>
 
 ## Host files, identities and operation
 
@@ -270,6 +1458,7 @@ container's configured environment.
 | --- | --- | --- |
 | `DISPLAY_MODE` | `headless` | `headless`, `nested`, `vnc`, `web` |
 | `DISPLAY_BACKEND` | `auto` | `auto`, `wayland`, `x11` |
+| `TARGET_APP` | unset | Optional executable and quoted arguments; selects a fullscreen application session |
 | `DISPLAY_WIDTH`, `DISPLAY_HEIGHT` | `1920`, `1080` | Initial dimensions, 10–9999 pixels |
 | `PLASMA_UID`, `PLASMA_GID` | image account IDs | Optional runtime desktop identity |
 | `HOST_WAYLAND_DISPLAY` | detected | Mounted socket path, or name relative to the host runtime mount |
@@ -282,10 +1471,13 @@ container's configured environment.
 | `LIBGL_ALWAYS_SOFTWARE` | `0` | Prefer an accessible GPU; software fallback remains available |
 | `INIT_LOG_LEVEL` | inherited (`2`) | Base framework logging level |
 
-Build arguments: `BASE_IMAGE=ghcr.io/skynet-core/systemd:fedora-44`,
+Build arguments: `BASE_IMAGE=ghcr.io/skynet-core/systemd:<distro>` (matching
+the selected Dockerfile; Fedora 44 for the unqualified file),
 `PLASMA_UID=1000`, `PLASMA_GID=1000`, `NOVNC_VERSION=1.7.0`, `NOVNC_SHA256`,
-`KRFB_SOURCE_VERSION=26.08.1`, `KRFB_SOURCE_SHA256`. For a locally built base use
-`--build-arg BASE_IMAGE=systemd:fedora-44`. Update checksums together with source
+`KRFB_SOURCE_VERSION=26.08.1`, `KRFB_SOURCE_SHA256`. For a locally built base,
+use the matching Dockerfile and base tag, for example
+`docker build -f Dockerfile.debian-13 --build-arg BASE_IMAGE=systemd:debian-13 -t plasma6:debian-13 .`.
+Update checksums together with source
 versions. noVNC comes from its SHA-256 checked GitHub archive; websockify serves it
 and forwards WebSocket traffic to VNC. Startup downloads nothing.
 
@@ -310,7 +1502,8 @@ through KWin's screencast protocol and has no such session, so that handler cann
 supply keyboard or mouse control.
 
 `native/kwin-input.cpp` provides a KRFB event plugin for this service, using KWin's
-fake-input protocol v6. It forwards keysyms, absolute pointer motion, button edges
+fake-input protocol v5/v6. Newer KWin accepts keysyms directly; Debian's v5 uses
+the compositor's keyboard map to send keycodes. It forwards absolute pointer motion, button edges
 and scrolling into the container's compositor. The virtual-monitor desktop entry
 is granted that specific interface; global KWin permission checks remain enabled.
 The plugin is selected only when the Wayland VNC service sets `PLASMA_KWIN_INPUT=1`.
@@ -324,11 +1517,40 @@ therefore appear on the remote desktop. X11 remote mode uses x11vnc.
 ### Rendering and VNC responsiveness
 
 The default prefers GPU/OpenGL rendering when the container can open a compatible
-GPU render node. With no usable GPU, KWin's virtual backend falls back to QPainter;
-Mesa clients can use software rendering. The image includes Mesa drivers. The
+GPU render node as `plasma`. With no accessible render node, init selects Mesa
+software rendering and Qt Quick's software backend. The image includes Mesa drivers. The
 privileged Docker commands above expose available devices; rootless Podman also
 requires the host user to have permission to open them. A device mount alone does
 not grant host permissions or install proprietary GPU drivers.
+
+KWin's screencast API requires OpenGL, so the Wayland VNC/web software fallback
+runs KWin with QPainter inside a private Xvfb server and uses x11vnc to capture
+that parent display. Applications and the Plasma session still use Wayland.
+The software helper preserves raw modifier key events and loads a scoped XTest
+compatibility library that spaces keyboard edges by at least 5 ms, preserving rapid
+Shift/Ctrl combinations through KWin's nested input backend.
+Headless and nested modes use their normal backends with software rendering.
+`LIBGL_ALWAYS_SOFTWARE=1` explicitly selects the software path; the default `0`
+means prefer GPU and select software if no render node can be opened.
+
+Current Arch uses Mesa software OpenGL and PipeWire instead: KWin 6.8 removed
+QPainter. This requires the host's `/dev/udmabuf` device, which exports CPU memory
+as DMA buffers without requiring a GPU. Prepare it before starting an Arch
+container on a machine without a GPU:
+
+```bash
+# HOST: load the kernel driver if /dev/udmabuf is absent.
+if [ ! -c /dev/udmabuf ]; then sudo modprobe udmabuf; fi
+# Rootless Podman needs your host user to be allowed to open the device.
+# This ACL lasts until the device is recreated; a udev rule can make it persistent.
+sudo setfacl -m "u:$(id -u):rw" /dev/udmabuf
+```
+
+The privileged run commands expose it automatically. Init grants the container's
+desktop account membership in the device's local group, preserving host device
+permissions. For a restricted container, explicitly add `--device=/dev/udmabuf`.
+The optional launcher uses Podman `keep-id` and your desktop UID/GID in every mode
+so rootless device access and host file ownership follow the same mapping.
 
 Inspect the actual compositor rather than inferring it from an environment value:
 
@@ -355,65 +1577,163 @@ for example `http://127.0.0.1:6080/vnc.html?quality=6&compression=1`.
 
 ## Validation
 
-Basic target, namespace, readiness and framebuffer checks:
+Run production-image init, systemd, boot and framebuffer checks for the
+distribution you built. These suites use the optional host launcher internally
+to check namespace and socket handling as well.
 
 ```bash
-bash test/test.sh --capture
-RUNTIME=podman bash test/test.sh --capture
-# Omit nested cases on machines without a host display:
-bash test/test.sh --capture --skip-nested
-# Exercise only an X11 host transport:
-python3 test/integration.py --modes nested --host-backend x11
+# Docker: choose the matching image.
+RUNTIME=docker IMAGE_TAG=plasma6:fedora-44 bash test/test.sh --capture
+RUNTIME=docker IMAGE_TAG=plasma6:debian-13 bash test/test.sh --capture
+RUNTIME=docker IMAGE_TAG=plasma6:ubuntu-26.04 bash test/test.sh --capture
+RUNTIME=docker IMAGE_TAG=plasma6:archlinux bash test/test.sh --capture
 ```
-
-For full interactive validation, build the test-only Qt editor target and run the
-UI suite. `uv` supplies the host-side RFB/WebSocket client and screenshot libraries:
 
 ```bash
-docker build --target ui-test -t plasma6:ui-test .
-uv run test/ui.py --runtime docker --image plasma6:ui-test
-
-podman build --format docker --layers --target ui-test -t plasma6:ui-test .
-uv run test/ui.py --runtime podman --image plasma6:ui-test
+# Rootless Podman: choose the matching image.
+RUNTIME=podman IMAGE_TAG=plasma6:fedora-44 bash test/test.sh --capture
+RUNTIME=podman IMAGE_TAG=plasma6:debian-13 bash test/test.sh --capture
+RUNTIME=podman IMAGE_TAG=plasma6:ubuntu-26.04 bash test/test.sh --capture
+RUNTIME=podman IMAGE_TAG=plasma6:archlinux bash test/test.sh --capture
 ```
 
-For each Wayland/X11 and VNC/web combination, the suite:
+On a host without a graphical session, append `--skip-nested` to the boot
+commands. For kiosk tests below, append `--modes headless vnc web`. The suites
+detect Arch's Wayland-only support automatically.
+
+The `ui-test` target adds a Qt editor and benchmark to the runtime image. `uv`
+supplies the host RFB/WebSocket and screenshot dependencies. Build and validate
+the test image in the same engine's store:
+
+<details>
+<summary>Docker: UI and kiosk validation for all distributions</summary>
+
+**Fedora 44**
+
+```bash
+docker build -f Dockerfile.fedora-44 --target ui-test -t plasma6:fedora-44-test .
+uv run test/ui.py --runtime docker --image plasma6:fedora-44-test
+uv run test/kiosk.py --runtime docker --image plasma6:fedora-44-test
+```
+
+**Debian 13**
+
+```bash
+docker build -f Dockerfile.debian-13 --target ui-test -t plasma6:debian-13-test .
+uv run test/ui.py --runtime docker --image plasma6:debian-13-test
+uv run test/kiosk.py --runtime docker --image plasma6:debian-13-test
+```
+
+**Ubuntu 26.04**
+
+```bash
+docker build -f Dockerfile.ubuntu-26.04 --target ui-test -t plasma6:ubuntu-26.04-test .
+uv run test/ui.py --runtime docker --image plasma6:ubuntu-26.04-test
+uv run test/kiosk.py --runtime docker --image plasma6:ubuntu-26.04-test
+```
+
+**Arch Linux**
+
+```bash
+docker build -f Dockerfile.archlinux --target ui-test -t plasma6:archlinux-test .
+uv run test/ui.py --runtime docker --image plasma6:archlinux-test
+uv run test/kiosk.py --runtime docker --image plasma6:archlinux-test
+```
+
+</details>
+
+<details>
+<summary>Rootless Podman: UI and kiosk validation for all distributions</summary>
+
+**Fedora 44**
+
+```bash
+podman build --format docker --layers -f Dockerfile.fedora-44 --target ui-test -t plasma6:fedora-44-test .
+uv run test/ui.py --runtime podman --image plasma6:fedora-44-test
+uv run test/kiosk.py --runtime podman --image plasma6:fedora-44-test
+```
+
+**Debian 13**
+
+```bash
+podman build --format docker --layers -f Dockerfile.debian-13 --target ui-test -t plasma6:debian-13-test .
+uv run test/ui.py --runtime podman --image plasma6:debian-13-test
+uv run test/kiosk.py --runtime podman --image plasma6:debian-13-test
+```
+
+**Ubuntu 26.04**
+
+```bash
+podman build --format docker --layers -f Dockerfile.ubuntu-26.04 --target ui-test -t plasma6:ubuntu-26.04-test .
+uv run test/ui.py --runtime podman --image plasma6:ubuntu-26.04-test
+uv run test/kiosk.py --runtime podman --image plasma6:ubuntu-26.04-test
+```
+
+**Arch Linux**
+
+```bash
+podman build --format docker --layers -f Dockerfile.archlinux --target ui-test -t plasma6:archlinux-test .
+uv run test/ui.py --runtime podman --image plasma6:archlinux-test
+uv run test/kiosk.py --runtime podman --image plasma6:archlinux-test
+```
+
+</details>
+
+For every supported Wayland/X11 and VNC/web combination, the UI suite:
 
 1. Boots the container with a single host file bind mount and a native Qt editor.
-2. Captures a framebuffer, drags the window with RFB pointer/button events, captures
-   it again, and measures the banner's translation from those screenshots.
-3. Clicks the editor, types mixed case, punctuation, digits and newlines through
-   RFB keyboard events, and presses Ctrl+S.
-4. Reads the bind-mounted file on the host and compares its complete contents with
-   the expected text; no host command writes that text into the file.
+2. Drags the window through RFB and measures its translation in before/after screenshots.
+3. Types mixed case, punctuation, digits and newlines through RFB, then presses Ctrl+S.
+4. Compares the UI-saved host file with the expected complete text and checks its owner.
 
-Each case retains before/after drag PNGs, a side-by-side comparison, a screenshot of
-text after Save, the actual host file, JSON assertions, and service/container logs
-under `test/.artifacts/`. The suite checks the same UI behavior over noVNC's actual
-WebSocket proxy. Test windows and input go only to the container display.
+Kiosk tests cover the Qt editor and actual Chromium, fullscreen display/input,
+application restart with the same KWin process, and absence of Plasma shell.
+Each case retains screenshots, JSON assertions, journals and host-file output
+under `test/.artifacts/`. Web cases exercise the websockify proxy used by noVNC.
+
+For the optional software and performance commands below, select the test
+image you built and the same engine. Choose one image assignment:
+
+```bash
+# Choose one distribution:
+export TEST_IMAGE=plasma6:fedora-44-test
+# export TEST_IMAGE=plasma6:debian-13-test
+# export TEST_IMAGE=plasma6:ubuntu-26.04-test
+# export TEST_IMAGE=plasma6:archlinux-test
+export RUNTIME=docker
+# export RUNTIME=podman
+```
 
 The performance suite drives the real noVNC JavaScript client in Chromium at
 1920×1080. It counts visible native-app animation changes, measures keyboard-event
 to canvas feedback, and validates window dragging with screenshots:
 
 ```bash
-docker build --target ui-test -t plasma6:ui-test .
-uv run test/performance.py --image plasma6:ui-test --expect-renderer gpu
-# Hide GPU nodes to test automatic software fallback, without forcing a renderer:
-uv run test/performance.py --image plasma6:ui-test --no-gpu --expect-renderer software
-# Rootless Podman uses its own image store:
-uv run test/performance.py --runtime podman --image plasma6:ui-test
-
-# Compare with unmodified Fedora KRFB, retaining the working input plugin:
-docker build --target ui-perf-baseline -t plasma6:perf-before .
-uv run test/performance.py --image plasma6:perf-before --measure-only
+# Uses TEST_IMAGE and RUNTIME selected above; the host needs Chromium.
+uv run test/performance.py --runtime "$RUNTIME" --image "$TEST_IMAGE" --expect-renderer gpu
+# Hide GPU nodes to verify automatic software fallback.
+uv run test/performance.py --runtime "$RUNTIME" --image "$TEST_IMAGE" --no-gpu --expect-renderer software --min-fps 20
+uv run test/ui.py --runtime "$RUNTIME" --image "$TEST_IMAGE" --no-gpu --backends wayland
+uv run test/kiosk.py --runtime "$RUNTIME" --image "$TEST_IMAGE" --no-gpu --backends wayland --modes vnc web
 ```
 
 Install Chromium on the host first. `uv` supplies Playwright and Pillow; the test
 uses the system `chromium` executable. Default thresholds are 25 visible fps and
-150 ms keyboard p95 on local transport, and can be adjusted for slower CI hosts.
+150 ms keyboard p95 on local transport. The software example uses a 20 fps budget;
+thresholds can be adjusted for slower CI hosts.
 JSON timings, renderer information, logs and screenshots survive teardown under
 `test/.artifacts/performance-*`. The production image excludes both test programs.
+For no-GPU testing, Docker masks `/dev/dri`; rootless Podman also omits privileged
+device imports while keeping systemd's capabilities. The renderer assertion checks
+that the test really exercised software rendering.
+
+For an A/B performance comparison with Fedora's original KRFB, build its
+baseline target in the selected engine:
+
+```bash
+"$RUNTIME" build -f Dockerfile.fedora-44 --target ui-perf-baseline -t plasma6:perf-before .
+uv run test/performance.py --runtime "$RUNTIME" --image plasma6:perf-before --measure-only
+```
 
 To reproduce the original Wayland failure, build `--target ui-baseline` and run
 `test/ui.py --image plasma6:ui-baseline --backends wayland --modes vnc`. That target
@@ -429,8 +1749,17 @@ mapping on hosts with different caller IDs.
 `bin/plasma6-run` is a convenience alternative to the direct commands above:
 
 ```bash
-DISPLAY_MODE=nested ./bin/plasma6-run
-RUNTIME=podman DISPLAY_MODE=web VNC_PASSWORD_FILE="$PWD/vnc-password" ./bin/plasma6-run -d
+# Docker nested desktop: choose the image you built.
+RUNTIME=docker IMAGE_TAG=plasma6:fedora-44 DISPLAY_MODE=nested ./bin/plasma6-run -d
+RUNTIME=docker IMAGE_TAG=plasma6:debian-13 DISPLAY_MODE=nested ./bin/plasma6-run -d
+RUNTIME=docker IMAGE_TAG=plasma6:ubuntu-26.04 DISPLAY_MODE=nested ./bin/plasma6-run -d
+RUNTIME=docker IMAGE_TAG=plasma6:archlinux DISPLAY_MODE=nested ./bin/plasma6-run -d
+
+# Rootless Podman web desktop: choose the image you built.
+RUNTIME=podman IMAGE_TAG=plasma6:fedora-44 DISPLAY_MODE=web VNC_PASSWORD_FILE="$PWD/vnc-password" ./bin/plasma6-run -d
+RUNTIME=podman IMAGE_TAG=plasma6:debian-13 DISPLAY_MODE=web VNC_PASSWORD_FILE="$PWD/vnc-password" ./bin/plasma6-run -d
+RUNTIME=podman IMAGE_TAG=plasma6:ubuntu-26.04 DISPLAY_MODE=web VNC_PASSWORD_FILE="$PWD/vnc-password" ./bin/plasma6-run -d
+RUNTIME=podman IMAGE_TAG=plasma6:archlinux DISPLAY_MODE=web VNC_PASSWORD_FILE="$PWD/vnc-password" ./bin/plasma6-run -d
 ```
 
 It detects and mounts host sockets for nested mode, sets namespace/identity options,

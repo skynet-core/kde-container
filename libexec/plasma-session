@@ -1,9 +1,38 @@
 #!/usr/bin/bash
 set -euo pipefail
 
+if [[ -n ${TARGET_APP:-} ]]; then
+	/usr/local/libexec/plasma-target-app --configure
+	# startplasma normally prepares KDE's service metadata. Kiosk bypasses that
+	# bootstrap; older KWin needs the Plasma menu/cache to find scoped protocol
+	# permissions for KRFB, even though no desktop shell is launched.
+	kbuildsycoca6
+	if [[ $DISPLAY_BACKEND == x11 ]]; then
+		/usr/local/libexec/plasma-wait x11
+		pids=()
+		# Invoked by the EXIT trap when either process terminates.
+		# shellcheck disable=SC2329
+		cleanup() {
+			kill "${pids[@]}" 2>/dev/null || true
+			wait "${pids[@]}" 2>/dev/null || true
+		}
+		trap cleanup EXIT
+		trap 'exit 0' TERM INT
+		/usr/bin/kwin_x11 --replace &
+		pids+=("$!")
+		/usr/local/libexec/plasma-target-app &
+		pids+=("$!")
+		wait -n "${pids[@]}"
+		exit $?
+	fi
+	export PATH="/usr/local/libexec/plasma-backend:$PATH"
+	exec /usr/bin/kwin_wayland_wrapper --xwayland --no-kactivities \
+		--no-global-shortcuts --exit-with-session /usr/local/libexec/plasma-target-app
+fi
+
 if [[ $DISPLAY_BACKEND == x11 ]]; then
-    /usr/local/libexec/plasma-wait x11
-    exec /usr/bin/startplasma-x11
+	/usr/local/libexec/plasma-wait x11
+	exec /usr/bin/startplasma-x11
 fi
 
 # Plasma starts kwin_wayland_wrapper, which owns the sockets and publishes the

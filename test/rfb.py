@@ -1,4 +1,5 @@
 """Small RFB 3.8 client used for actual input and framebuffer regression tests."""
+
 import socket
 import struct
 import time
@@ -28,14 +29,21 @@ class RFBClient:
         methods = self.read(self.read(1)[0])
         assert 2 in methods, f"Password authentication was not offered: {methods}"
         self.send(b"\x02")
-        key = bytes(int(f"{byte:08b}"[::-1], 2) for byte in password.encode("ascii").ljust(8, b"\0"))
+        key = bytes(
+            int(f"{byte:08b}"[::-1], 2)
+            for byte in password.encode("ascii").ljust(8, b"\0")
+        )
         self.send(DES.new(key, DES.MODE_ECB).encrypt(self.read(16)))
         assert self.read(4) == b"\0\0\0\0", "VNC authentication failed"
         self.send(b"\x01")
         self.width, self.height = struct.unpack(">HH", self.read(4))
         self.read(16)
-        self.name = self.read(struct.unpack(">I", self.read(4))[0]).decode(errors="replace")
-        pixel_format = struct.pack(">BBBBHHHBBBxxx", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0)
+        self.name = self.read(struct.unpack(">I", self.read(4))[0]).decode(
+            errors="replace"
+        )
+        pixel_format = struct.pack(
+            ">BBBBHHHBBBxxx", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0
+        )
         self.send(b"\x00\0\0\0" + pixel_format)
         self.send(struct.pack(">BBHi", 2, 0, 1, 0))  # Raw encoding.
         self.frame = Image.new("RGB", (self.width, self.height))

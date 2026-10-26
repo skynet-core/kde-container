@@ -2,6 +2,7 @@ flowchart TD
     tmp["Temporary file setup"]
     host["Host X11 preparation"]
     bus["Private D-Bus"]
+    software["Conditional software display, only without GPU"]
     session["Desktop session"]
     pw["PipeWire"]
     wp["WirePlumber"]
@@ -9,5 +10,6 @@ flowchart TD
     web["Web proxy"]
     tmp --> host --> bus
     bus --> session --> vnc
+    bus --> software --> session
     bus --> pw --> wp --> vnc
     vnc --> web

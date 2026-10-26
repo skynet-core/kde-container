@@ -1,0 +1,13 @@
+flowchart TD
+    init["Init validates TARGET_APP and display settings"] --> choice{"TARGET_APP set?"}
+    choice -->|"No"| plasma["startplasma: normal Plasma desktop"]
+    choice -->|"Yes"| rules["Isolated kiosk configuration and fullscreen rules"]
+    rules --> metadata["Prepare Plasma menu prefix and KDE service cache"]
+    metadata --> kwin["KWin compositor without Plasma shell"]
+    kwin --> ready["Wait for compositor and exported output"]
+    ready --> launch["Start foreground GUI application as plasma"]
+    launch --> running["UI visible over nested, VNC or web display"]
+    running --> exit{"Application exits?"}
+    exit -->|"Yes: wait 2 seconds"| launch
+    exit -->|"No"| running
+    running --> health["Health: KWin plus matching live application PID"]
