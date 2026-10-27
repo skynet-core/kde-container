@@ -124,6 +124,7 @@ def collect_artifacts(runtime, name, directory, services=(), extra=()):
         ("processes.log", ["top", name]),
         ("session.env", ["exec", name, "cat", "/etc/plasma/session.env"]),
         ("renderer.log", renderer_command(name)),
+        ("gpu.json", ["exec", name, "cat", "/etc/plasma/gpu.json"]),
         *[
             (
                 f"{service}.log",

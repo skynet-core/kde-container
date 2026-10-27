@@ -86,39 +86,43 @@ module_plasma_run() {
 	[[ $mode != nested || $host_backend != none ]] || die 'nested mode requires a mounted host Wayland or X11 socket'
 	info "Plasma: $backend:$mode (host transport: $host_backend)"
 
-	# Docker recreates device nodes without host ACLs; grant the local device group.
-	if [[ -f /etc/plasma/opengl-software-capture && -c /dev/udmabuf ]]; then
-		local buffer_gid
-		buffer_gid=$(stat -c %g /dev/udmabuf)
-		if ! getent group "$buffer_gid" >/dev/null; then
-			groupadd --gid "$buffer_gid" plasma-udmabuf
+	# Docker recreates device nodes without host ACLs; grant their local groups.
+	local device device_gid
+	for device in /dev/dri/renderD* /dev/dri/card* /dev/nvidia* /dev/udmabuf; do
+		[[ -c $device ]] || continue
+		[[ $(stat -c %a "$device") == *[67] ]] && continue
+		device_gid=$(stat -c %g "$device")
+		if ! getent group "$device_gid" >/dev/null; then
+			groupadd --gid "$device_gid" "plasma-device-$device_gid"
 		fi
-		usermod --append --groups "$buffer_gid" plasma
-	fi
+		usermod --append --groups "$device_gid" plasma
+	done
 
-	# Check access as the service user: root's device access is not sufficient.
-	# An unavailable GPU also needs a software Qt Quick backend, so portal and
-	# desktop applications can start without attempting an unusable EGL display.
-	if [[ $software == 0 ]] && ! runuser -u plasma -- /usr/bin/python3 - <<'PY'
-import os
-from pathlib import Path
-import sys
-
-for device in Path('/dev/dri').glob('renderD*'):
-    try:
-        descriptor = os.open(device, os.O_RDWR | os.O_CLOEXEC)
-    except OSError:
-        continue
-    os.close(descriptor)
-    sys.exit(0)
-sys.exit(1)
-PY
-	then
-		software=1
-		info 'Plasma: no accessible GPU render node; using software fallback'
+	# Injected NVIDIA libraries can use the host's libdir instead of the image's.
+	local allocator_library gbm_library backend_directory
+	allocator_library=$(ldconfig -p | awk '$1 == "libnvidia-allocator.so.1" && !found {print $NF; found=1}')
+	if [[ -f $allocator_library ]]; then
+		gbm_library=$(ldconfig -p | awk '$1 == "libgbm.so.1" && !found {print $NF; found=1}')
+		if [[ -f $gbm_library ]]; then
+			backend_directory=$(dirname -- "$(readlink -f -- "$gbm_library")")/gbm
+			install -d "$backend_directory"
+			if [[ ! -e $backend_directory/nvidia-drm_gbm.so ]]; then
+				ln -sfn -- "$allocator_library" "$backend_directory/nvidia-drm_gbm.so"
+			fi
+		fi
 	fi
 
 	install -d /etc/plasma /tmp/.X11-unix
+	# An open render node is insufficient: EGL must create a hardware context.
+	if [[ $software == 0 ]]; then
+		if ! runuser -u plasma -- /usr/local/libexec/plasma-gpu >/etc/plasma/gpu.json; then
+			software=1
+			info 'Plasma: no usable GPU renderer; using software fallback'
+		fi
+	else
+		printf '{"devices": [], "forced_software": true}\n' >/etc/plasma/gpu.json
+	fi
+	chmod 644 /etc/plasma/gpu.json
 	chmod 1777 /tmp/.X11-unix
 	# Copy host cookies without binding them to the host's hostname.
 	if [[ -n $host_x11 && -n $host_xauthority && -r $host_xauthority ]]; then

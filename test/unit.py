@@ -224,7 +224,7 @@ class SupportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             completed = subprocess.CompletedProcess([], 1, "stdout\n", "stderr\n")
-            results = [subprocess.TimeoutExpired("logs", 180), *([completed] * 6)]
+            results = [subprocess.TimeoutExpired("logs", 180), *([completed] * 7)]
             with patch.object(support, "run", side_effect=results) as run:
                 support.collect_artifacts(
                     "docker", "fixture", directory, services=("vnc",)
@@ -236,9 +236,43 @@ class SupportTests(unittest.TestCase):
                 "processes.log",
                 "session.env",
                 "renderer.log",
+                "gpu.json",
                 "vnc.log",
             ):
                 self.assertEqual((directory / filename).read_text(), "stdout\nstderr\n")
+
+
+class GpuTests(unittest.TestCase):
+    def test_probe_failure_does_not_hide_another_gpu(self):
+        loader = importlib.machinery.SourceFileLoader(
+            "gpu", str(support.ROOT / "libexec/plasma-gpu")
+        )
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        gpu = importlib.util.module_from_spec(spec)
+        loader.exec_module(gpu)
+        paths = [Path(f"/dev/dri/renderD{number}") for number in range(128, 133)]
+        nvidia = {"device": str(paths[1]), "renderer": "NVIDIA GPU", "hardware": True}
+        amd = {"device": str(paths[2]), "renderer": "AMD GPU", "hardware": True}
+        software = {"device": str(paths[3]), "renderer": "llvmpipe", "hardware": False}
+        with (
+            patch.object(gpu.Path, "glob", return_value=paths),
+            patch.object(gpu.Path, "is_char_device", return_value=True),
+            patch.object(
+                gpu.subprocess,
+                "run",
+                side_effect=[
+                    subprocess.TimeoutExpired("probe", 8),
+                    subprocess.CompletedProcess([], 0, json.dumps(nvidia)),
+                    subprocess.CompletedProcess([], 0, json.dumps(amd)),
+                    subprocess.CompletedProcess([], 0, json.dumps(software)),
+                    subprocess.CompletedProcess([], -11, ""),
+                ],
+            ),
+        ):
+            devices = gpu.detect()
+        self.assertIn("error", devices[0])
+        self.assertEqual(devices[1:4], [nvidia, amd, software])
+        self.assertIn("error", devices[4])
 
 
 class KioskTests(unittest.TestCase):

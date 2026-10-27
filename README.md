@@ -1580,6 +1580,7 @@ Podman, root remains limited to its user namespace.
 | `VNC_PASSWORD_FILE` | unset | Password file; takes precedence over `VNC_PASSWORD` |
 | `VNC_PASSWORD` | unset | Password when no file is provided |
 | `VNC_MAX_FPS` | `60` | Remote update rate, 1–60; lower it to reduce CPU/network use |
+| `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility,graphics,display` | NVIDIA toolkit capabilities requested before init; GPU devices still require `--gpus` |
 | `LIBGL_ALWAYS_SOFTWARE` | `0` | Prefer an accessible GPU; software fallback remains available |
 | `SYSTEMD_MASKED` | `NetworkManager.service` | Base init framework disables and masks these units before boot; comma/space-separated list |
 | `INIT_LOG_LEVEL` | inherited (`2`) | Base framework logging level |
@@ -1629,9 +1630,13 @@ therefore appear on the remote desktop. X11 remote mode uses x11vnc.
 
 ### Rendering and VNC responsiveness
 
-The default prefers GPU/OpenGL rendering when the container can open a compatible
-GPU render node as `plasma`. With no accessible render node, init selects Mesa
-software rendering and Qt Quick's software backend. The image includes Mesa drivers. The
+Startup prefers working GPU/OpenGL rendering. It checks every visible render node
+by creating a real GBM/EGL context as `plasma` and rejects software-only contexts.
+KWin chooses a hardware device compatible with the selected display path. NVIDIA,
+AMD and Intel devices keep their native drivers; there is no global vendor override.
+If no hardware context works, init selects Mesa software rendering and Qt Quick's
+software backend. Results are saved in `/etc/plasma/gpu.json`. The image includes
+Mesa drivers. The
 privileged Docker commands above expose available devices; rootless Podman also
 requires the host user to have permission to open them. A device mount alone does
 not grant host permissions or install proprietary GPU drivers.
@@ -1643,8 +1648,57 @@ The software helper preserves raw modifier key events and loads a scoped XTest
 compatibility library that spaces keyboard edges by at least 5 ms, preserving rapid
 Shift/Ctrl combinations through KWin's nested input backend.
 Headless and nested modes use their normal backends with software rendering.
+
+For NVIDIA, use a host with the NVIDIA Container Toolkit and add `--gpus all`
+to the Docker command. Images default
+`NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display`, so older toolkit
+versions also inject the graphics libraries. These libraries must match the host
+kernel driver; installing an arbitrary NVIDIA driver inside the image is unnecessary.
+Init makes injected NVIDIA GBM backends discoverable in the container's library
+directory. This handles an Arch host using `/usr/lib/gbm` with a Fedora image using
+`/usr/lib64/gbm`, which otherwise can produce a black nested window and llvmpipe.
+AMD and Intel use the packaged Mesa drivers and exposed `/dev/dri` nodes.
+
+```bash
+# NVIDIA: Wayland Plasma inside the host X11/Xwayland window.
+docker run -d --rm --name plasma6-nvidia-nested \
+  --privileged --gpus all --user=0:0 --userns=host --cgroupns=private \
+  --pids-limit=8192 --shm-size=2g --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:fedora-44
+# Inspect all startup probes and the actual compositor renderer.
+docker exec plasma6-nvidia-nested cat /etc/plasma/gpu.json
+docker exec --user=plasma plasma6-nvidia-nested \
+  env XDG_RUNTIME_DIR=/run/plasma DBUS_SESSION_BUS_ADDRESS=unix:path=/run/plasma/bus \
+  qdbus-qt6 org.kde.KWin /KWin supportInformation
+```
+
+For rootless Podman, use NVIDIA CDI (`nvidia-ctk cdi list` must list the GPU).
+With `keep-id`, avoid combining CDI with privileged automatic device imports;
+use the systemd capabilities explicitly to prevent duplicate `/dev/dri` mounts:
+
+```bash
+# Rootless Podman: NVIDIA-accelerated nested Wayland over the host X11 socket.
+podman run -d --rm --name plasma6-nvidia-nested \
+  --device=nvidia.com/gpu=all --cap-add=all --security-opt=seccomp=unconfined \
+  --systemd=always --user=0:0 --userns=keep-id --passwd=false --cgroupns=private \
+  --pids-limit=8192 --shm-size=2g --tmpfs /run --tmpfs /tmp:mode=1777 \
+  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
+  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
+  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
+  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
+  -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=nested plasma6:fedora-44
+```
+
+The GPU checks describe usable devices. The actual compositor renderer also
+depends on its display backend; inspect KWin's support information. The X11
+profiles retain their Xvfb/Xephyr/shared-memory Xwayland display paths.
+
 `LIBGL_ALWAYS_SOFTWARE=1` explicitly selects the software path; the default `0`
-means prefer GPU and select software if no render node can be opened.
+means prefer GPU and select software if no hardware context can be created.
 
 Current Arch uses Mesa software OpenGL and PipeWire instead: KWin 6.8 removed
 QPainter. This requires the host's `/dev/udmabuf` device, which exports CPU memory
@@ -1899,6 +1953,15 @@ JSON timings, renderer information, logs and screenshots survive teardown under
 For no-GPU testing, Docker masks `/dev/dri`; rootless Podman also omits privileged
 device imports while keeping systemd's capabilities. The renderer assertion checks
 that the test really exercised software rendering.
+
+To verify NVIDIA acceleration in the nested regression suite:
+
+```bash
+# Select the image you rebuilt. --expect-renderer rejects llvmpipe/QPainter.
+python3 test/integration.py --runtime docker --image plasma6:fedora-44 \
+  --gpus all --expect-renderer gpu --modes nested --backends wayland \
+  --host-backend x11
+```
 
 For an A/B performance comparison with Fedora's original KRFB, build its
 baseline target in the selected engine:

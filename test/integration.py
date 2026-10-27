@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from support import available_backends, collect_artifacts, wait_ready
+from support import available_backends, collect_artifacts, renderer_command, wait_ready
 from support import run as command
 
 
@@ -35,8 +35,12 @@ def main():
         "--userns",
         help="Override the launcher's namespace for mapping regression checks",
     )
+    parser.add_argument("--gpus", help="Pass a Docker GPU request, for example all")
+    parser.add_argument("--expect-renderer", choices=("gpu", "software"))
     options = parser.parse_args()
     runtime = options.runtime
+    if options.gpus and Path(runtime).name != "docker":
+        parser.error("--gpus requires Docker")
     artifacts = (
         Path(__file__).resolve().parent
         / ".artifacts"
@@ -75,11 +79,38 @@ def main():
                 run_options = ["-d", "--rm=false"]
                 if options.userns:
                     run_options.append(f"--userns={options.userns}")
+                if options.gpus:
+                    run_options += ["--gpus", options.gpus]
                 result = command(str(launcher), *run_options, env=environment)
                 (case / "run.log").write_text(result.stdout + result.stderr)
                 if result.returncode:
                     raise RuntimeError(result.stderr)
                 wait_ready(runtime, name)
+                if options.expect_renderer:
+                    renderer = command(runtime, *renderer_command(name))
+                    assert renderer.returncode == 0, renderer.stderr
+                    rendering = "\n".join(
+                        line.lower()
+                        for line in renderer.stdout.splitlines()
+                        if line.startswith(
+                            ("Compositing Type:", "OpenGL renderer string:")
+                        )
+                    )
+                    software = any(
+                        name in rendering
+                        for name in (
+                            "qpainter",
+                            "llvmpipe",
+                            "softpipe",
+                            "swrast",
+                            "swiftshader",
+                        )
+                    )
+                    assert software == (options.expect_renderer == "software"), (
+                        rendering
+                    )
+                    if options.expect_renderer == "gpu":
+                        assert "opengl renderer string:" in rendering, rendering
                 masked = command(
                     runtime,
                     "exec",

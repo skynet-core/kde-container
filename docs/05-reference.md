@@ -61,6 +61,7 @@ local files in this checkout.
 
 | File | Responsibility |
 | --- | --- |
+| [plasma-gpu](../libexec/plasma-gpu) | Probe GBM/EGL hardware contexts per render node and retain startup diagnostics |
 | [plasma-host-display](../libexec/plasma-host-display) | Prepare host X11 alias and display lock after tmpfiles |
 | [plasma-session](../libexec/plasma-session) | Start the correct Plasma session; put the KWin adapter on the Wayland session's PATH |
 | [plasma-backend/kwin_wayland](../libexec/plasma-backend/kwin_wayland) | Add virtual/nested backend arguments and preserve wrapper descriptors |
@@ -120,6 +121,7 @@ service; the init module selects the values written into `session.env`.
 | `VNC_PASSWORD_FILE` | Unset | Password source file, taking precedence over `VNC_PASSWORD` |
 | `VNC_PASSWORD` | Unset | Password source when no file is supplied |
 | `VNC_MAX_FPS` | `60` | Remote update cadence, validated as an integer from 1 to 60 |
+| `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility,graphics,display` | Toolkit library capabilities, applied before init when GPU injection is requested |
 | `LIBGL_ALWAYS_SOFTWARE` | `0` | Permit preferred GPU rendering, with automatic software fallback |
 | `LANG` | Supplied value or `C.UTF-8` fallback | Locale value written to the service environment |
 | `SYSTEMD_MASKED` | `NetworkManager.service` | Inherited init disables and masks this comma/space-separated unit list before boot |

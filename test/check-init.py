@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Run inside a disposable image: exercise the actual inherited init framework."""
 
+import json
 import os
 import shlex
 import shutil
@@ -239,7 +240,15 @@ class InitTests(unittest.TestCase):
     def test_gpu_preference_and_software_override(self):
         automatic = self.boot()
         self.assertIn(automatic["LIBGL_ALWAYS_SOFTWARE"], ("0", "1"))
+        devices = json.loads(Path("/etc/plasma/gpu.json").read_text())["devices"]
+        self.assertEqual(
+            automatic["LIBGL_ALWAYS_SOFTWARE"] == "0",
+            any(device.get("hardware") for device in devices),
+        )
         software = self.boot(LIBGL_ALWAYS_SOFTWARE="1")
+        self.assertTrue(
+            json.loads(Path("/etc/plasma/gpu.json").read_text())["forced_software"]
+        )
         self.assertEqual(software["LIBGL_ALWAYS_SOFTWARE"], "1")
         self.assertEqual(software["QT_QUICK_BACKEND"], "software")
         self.assertEqual(software["PLASMA_SOFTWARE_CAPTURE"], "0")

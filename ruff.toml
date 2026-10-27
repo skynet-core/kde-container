@@ -4,4 +4,5 @@ extend-include = [
     "libexec/plasma-remote-output",
     "libexec/plasma-target-app",
     "libexec/plasma-wait",
+    "libexec/plasma-gpu",
 ]

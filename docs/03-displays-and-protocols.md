@@ -154,7 +154,10 @@ a nested compositor can accidentally connect to its own not-yet-ready X server.
 physical display device.
 
 The image includes Mesa drivers and defaults to `LIBGL_ALWAYS_SOFTWARE=0`, allowing
-GPU rendering. Init checks render-node access as `plasma`. When no node is usable,
+GPU rendering. Init creates a GBM/EGL context for each render node as `plasma`,
+using the [GPU probe](../libexec/plasma-gpu). An open device file alone does not
+prove that its driver works. Crashes/timeouts are isolated per device; software
+contexts such as llvmpipe do not count as hardware. When no hardware node is usable,
 it writes `LIBGL_ALWAYS_SOFTWARE=1` and `QT_QUICK_BACKEND=software` into the service
 environment. This also allows Qt desktop components to start without GPU EGL.
 KWin uses QPainter when its backend has no render device.
@@ -166,6 +169,21 @@ privileged Docker examples expose those devices; rootless Podman still depends o
 host-user access. An environment setting does not grant device permissions. Setting
 `LIBGL_ALWAYS_SOFTWARE=1` requests software rendering from Mesa consumers; inspect
 KWin's support information to establish the actual compositor and driver.
+
+For NVIDIA, Docker's `--gpus all` activates the host Container Toolkit. The image
+requests `compute,utility,graphics,display` capabilities before the init script runs.
+See [NVIDIA's capability documentation](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html#driver-capabilities).
+The injected GBM allocator can land in the host's `/usr/lib` while Fedora's Mesa
+loader uses `/usr/lib64`. Init links that allocator into the image's own GBM backend
+directory. It leaves Mesa's AMD/Intel backends and EGL vendor selection intact.
+Container-local device groups grant the desktop account access without changing
+host device permissions. `/etc/plasma/gpu.json` records the probed devices and
+renderers; KWin support information records the compositor's final selection.
+
+Host display compatibility still governs which GPU can present its buffers; a
+vendor name alone is not a performance ranking. GPU discovery does not replace
+the X11 profiles' Xvfb/Xephyr/shared-memory Xwayland paths. In particular, Xephyr
+does not provide the same accelerated client GLX path as the host X server.
 
 KWin's screencast API supports OpenGL compositing and rejects QPainter capture.
 For Wayland VNC/web without a GPU, the conditional

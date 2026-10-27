@@ -45,6 +45,7 @@ RUN chmod +x /init.d/modules/*.sh /usr/local/bin/* /usr/local/libexec/* \
 
 ENV MODULE_SYSTEMD_ENABLED=true \
     SYSTEMD_MASKED=NetworkManager.service \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display \
     DISPLAY_BACKEND=auto \
     DISPLAY_MODE=headless \
     DISPLAY_WIDTH=1920 \
