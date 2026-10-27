@@ -38,11 +38,11 @@ def main():
                     f"build/packages/debian/{phase}.txt",
                 )
             content = content.replace(
-                "# DISTRO_BROWSER_SOURCE", UBUNTU_BROWSER.rstrip()
+                "FROM runtime AS ui-test", UBUNTU_BROWSER + "\nFROM runtime AS ui-test"
             )
             content = content.replace(
                 "# DISTRO_BROWSER_ARTIFACTS",
-                "COPY build/packages/ubuntu/session.txt /build-support/packages/session.txt\nRUN /build-support/install-packages session\nCOPY --from=chromium-packages /chromium-debs/ /tmp/chromium-debs/",
+                "COPY --from=chromium-packages /chromium-debs/ /tmp/chromium-debs/",
             )
         if distro == "debian-13":
             content = content.replace(

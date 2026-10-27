@@ -58,7 +58,6 @@ files without making the build stage the final runtime filesystem.
 | Stage | Contents | Why it exists |
 | --- | --- | --- |
 | `desktop-packages` | Distribution desktop packages and account | Share cached package installation across build/runtime stages |
-| `application-packages` | Desktop packages plus Chromium | Include the reference kiosk browser without adding it to compiler stages |
 | `desktop` | Packages plus scripts, units and defaults | Common runtime foundation |
 | `input-source` | Development tools and checksum-verified KRFB sources | Common foundation for independent input and capture builds |
 | `input-build` | `input-source` plus the project's native source | Compile the KWin event plugin and Qt test programs |
@@ -67,12 +66,13 @@ files without making the build stage the final runtime filesystem.
 | `vnc-build` | `input-source` plus upstream build dependencies | Build the patched virtual monitor and PipeWire capture plugin |
 | `runtime` | `input-runtime` plus those two patched artifacts | Complete desktop with input and performance fixes |
 | `plasma6` | Inherits `runtime` | Last stage; the default production build target |
-| `ui-test` | `runtime` plus the Qt editor and animation benchmark | Interactive and performance regression tests |
+| `ui-test` | `runtime` plus Chromium, the Qt editor and animation benchmark | Kiosk, interactive and performance regression tests |
 | `ui-baseline` | `desktop` plus the Qt editor, without the plugin | Reproduce the original Wayland input failure |
 | `ui-perf-baseline` | `input-runtime` plus the animation benchmark | Compare performance with original KRFB while keeping input working |
 
-A production build does not copy the test editor or the compiler toolchain from
-`input-build` into its final filesystem. It also removes `/build-support` and
+Chromium is installed only in `ui-test`; its browser packages and layers are not
+ancestors of `runtime` or `plasma6`. A production build does not copy the test
+editor or the compiler toolchain from `input-build` into its final filesystem. It also removes `/build-support` and
 keeps the host launcher in the checkout instead of copying it into the image.
 Docker describes this artifact-selection
 technique in its [multi-stage build guide](https://docs.docker.com/build/building/multi-stage/).
@@ -157,22 +157,22 @@ python3 build/render-dockerfiles.py --check
 
 [`install-packages`](../build/install-packages) selects DNF, APT or pacman from
 `/etc/os-release`. Package lists separate desktop, browser, input build and capture
-build dependencies. Ubuntu and Debian share the identical development lists in
-`build/packages/debian/`; Ubuntu keeps its own desktop, browser and session lists.
-Only a stage's relevant list is copied
-before installation, so changing a compiler dependency does not invalidate the
-desktop package cache. Ubuntu also has a `session.txt` list for its separately
-packaged `plasma-session-x11` launcher. Arch uses a complete `pacman -Syu` update to avoid partial
-upgrades. Its websockify launcher lives in an isolated Python environment, with a
+build dependencies. Browser lists are used only by `ui-test`. Ubuntu and Debian
+share the identical development lists in `build/packages/debian/`; Ubuntu keeps
+its own desktop and browser lists. Only a stage's relevant list is copied before
+installation, so changing a compiler dependency does not invalidate the desktop
+package cache. Ubuntu's desktop list includes its separately packaged
+`plasma-session-x11` launcher, so the production image retains X11 support.
+Arch uses a complete `pacman -Syu` update to avoid partial upgrades. Its websockify launcher lives in an isolated Python environment, with a
 checksum-pinned wheel and dependencies supplied by native Arch packages.
 
-Ubuntu's Chromium package is a Snap transition package. A separate Debian stage
-downloads `chromium`, `chromium-common`, `chromium-sandbox` and `libjpeg62-turbo`
+Ubuntu's Chromium package is a Snap transition package. For `ui-test`, a separate
+Debian stage downloads `chromium`, `chromium-common`, `chromium-sandbox` and `libjpeg62-turbo`
 using signed APT metadata. Ubuntu installs those application files, resolving
 remaining libraries from its own repositories. This avoids running snapd inside
 the container. The Debian repository is never configured on the Ubuntu system.
 The browser version follows Debian security updates at build time, so rebuild
-the image to receive them.
+the test image to receive them. Production builds skip this browser stage.
 
 [`create-user`](../build/create-user) also handles Ubuntu's existing UID 1000
 account by renaming it to `plasma`. [`normalize-runtime`](../build/normalize-runtime)
@@ -284,7 +284,7 @@ STOPSIGNAL SIGRTMIN+3
 ```
 
 The entrypoint comes from the base image's
-[extensible init framework](https://github.com/skynet-core/systemd/tree/6d2a500a094ced57306be10c5ef519d929b605d2).
+[extensible init framework](https://github.com/skynet-core/systemd/tree/1a4a0ca746a21cfff521bb1906cfe6e66ae9f578).
 This child image extends it instead of replacing it with a new independent boot
 script.
 
@@ -345,10 +345,19 @@ evaluated as arbitrary shell code.
 
 | Module | Runs when | What it prepares |
 | --- | --- | --- |
-| `300-plasma-user.sh` | A runtime UID or GID was supplied | Desktop account and home ownership |
+| `300-plasma-user.sh` | Always | Desktop account IDs, optional password and sudo policy |
 | `400-plasma.sh` | Always | Validated mode/backend, host transport, credentials, environment and target choice |
-| Inherited `501-systemd.sh` | Systemd module enabled | The default-target symlink and any requested unit links |
+| Inherited `501-systemd.sh` | Systemd module enabled | Default-target and requested unit links; disable presets and masks |
 | Inherited `999-exec.sh` | Always | Replace the shell with the command, normally systemd |
+
+NetworkManager is masked at build time with an `/etc/systemd/system/NetworkManager.service`
+symlink to `/dev/null`, even when the distribution does not install the service.
+The build removes package enablement links before masking, because presets skip
+units that are already masked. The image also defaults
+`SYSTEMD_MASKED=NetworkManager.service`. Before boot, the base init framework
+writes a `disable NetworkManager.service` preset and reapplies the mask. A mask prevents manual and dependency
+activation as well as autostart. Docker or Podman configures the container network.
+See the [upstream masking implementation](https://github.com/skynet-core/systemd/commit/1a4a0ca746a21cfff521bb1906cfe6e66ae9f578).
 
 Invalid IDs, invalid mode names, missing required passwords and missing nested
 host sockets are rejected before systemd starts the desktop.
@@ -502,7 +511,9 @@ nested, headless, VNC and web modes on either desktop backend.
 
 The init module validates the executable as the unprivileged `plasma` user before
 PID 1 starts. Arguments follow quoted command-line syntax and are split using
-Python's `shlex.split`; no shell evaluates the string. Fedora calls its Chromium
+Python's `shlex.split`; no shell evaluates the string. Production images can run
+installed applications such as Konsole. For Chromium testing, build `--target ui-test`;
+Chromium is absent from production. Fedora calls its Chromium
 executable `chromium-browser`; the helper also accepts the public `chromium` name.
 
 ```bash

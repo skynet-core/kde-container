@@ -24,35 +24,38 @@ supported. The commands below run containers directly, without a host launcher.
 
 Each base is `ghcr.io/skynet-core/systemd:<tag>`. All variants share the same init
 modules, services, GPU preference, remote input fixes and optional kiosk session.
+NetworkManager is masked in every production image; container networking is
+provided by Docker or Podman. Chromium is installed only in the `ui-test` target.
 
 Always select a Dockerfile with `-f Dockerfile.<distro>`. The maintained template
 is `Dockerfile.fedora-44`; the Debian, Ubuntu and Arch Dockerfiles are generated
-from it. There is no unqualified `Dockerfile`.
+from it. There is no unqualified `Dockerfile`. Use `--pull` (Docker) or
+`--pull=always` (Podman) when rebuilding to obtain the latest systemd init framework.
 
 ### Build with Docker
 
 ```bash
 # Fedora 44
-docker build -f Dockerfile.fedora-44 -t plasma6:fedora-44 .
+docker build --pull -f Dockerfile.fedora-44 -t plasma6:fedora-44 .
 # Debian 13
-docker build -f Dockerfile.debian-13 -t plasma6:debian-13 .
+docker build --pull -f Dockerfile.debian-13 -t plasma6:debian-13 .
 # Ubuntu 26.04
-docker build -f Dockerfile.ubuntu-26.04 -t plasma6:ubuntu-26.04 .
+docker build --pull -f Dockerfile.ubuntu-26.04 -t plasma6:ubuntu-26.04 .
 # Arch Linux
-docker build -f Dockerfile.archlinux -t plasma6:archlinux .
+docker build --pull -f Dockerfile.archlinux -t plasma6:archlinux .
 ```
 
 ### Build with Podman
 
 ```bash
 # Fedora 44
-podman build --format docker --layers -f Dockerfile.fedora-44 -t plasma6:fedora-44 .
+podman build --pull=always --format docker --layers -f Dockerfile.fedora-44 -t plasma6:fedora-44 .
 # Debian 13
-podman build --format docker --layers -f Dockerfile.debian-13 -t plasma6:debian-13 .
+podman build --pull=always --format docker --layers -f Dockerfile.debian-13 -t plasma6:debian-13 .
 # Ubuntu 26.04
-podman build --format docker --layers -f Dockerfile.ubuntu-26.04 -t plasma6:ubuntu-26.04 .
+podman build --pull=always --format docker --layers -f Dockerfile.ubuntu-26.04 -t plasma6:ubuntu-26.04 .
 # Arch Linux
-podman build --format docker --layers -f Dockerfile.archlinux -t plasma6:archlinux .
+podman build --pull=always --format docker --layers -f Dockerfile.archlinux -t plasma6:archlinux .
 ```
 
 Choose the distribution you want to run. Each run example below uses its explicit
@@ -67,10 +70,11 @@ podman tag plasma6:fedora-44 plasma6:local
 Podman's `--format docker` preserves the image health check. For an OCI import that
 has lost its health metadata, add `--health-cmd=/usr/local/bin/plasma-healthcheck`.
 
-Ubuntu's native `chromium-browser` package is a Snap launcher. Its Dockerfile instead
-fetches Chromium, its common files, sandbox helper and JPEG ABI package from
-Debian's signed APT archive in a separate stage. Remaining dependencies come from
-Ubuntu; no Debian repository is added to the Ubuntu image. Arch uses native desktop
+Ubuntu's native `chromium-browser` package is a Snap launcher. For the `ui-test`
+target, its Dockerfile fetches Chromium, its common files, sandbox helper and JPEG
+ABI package from Debian's signed APT archive in a separate stage. Remaining
+dependencies come from Ubuntu; no Debian repository is added to the Ubuntu image.
+The production build skips this browser stage. Arch uses native desktop
 packages and a dedicated Python environment for checksum-pinned websockify.
 Debian's older KWin streams its existing virtual monitor through PipeWire;
 newer releases create the additional `Virtual-Plasma` monitor. Both support GPU
@@ -228,7 +232,10 @@ it unset or empty to retain the normal KDE Plasma session. This works with every
 supported profile: eight on Fedora/Debian/Ubuntu and four Wayland profiles on
 Arch, including GPU rendering and software fallback.
 
-Chromium is included. `TARGET_APP=chromium` starts it with kiosk and first-run
+Production images include Konsole and Dolphin; use `TARGET_APP=konsole` to try
+kiosk mode with an installed application. Chromium is available only in the
+`ui-test` target. Build that target for the Chromium examples below.
+`TARGET_APP=chromium` starts it with kiosk and first-run
 suppression flags, using the selected Wayland/X11 backend. Without a URL it opens
 `about:blank`. The kiosk examples open `https://example.org`; replace that URL
 with the page you want to display.
@@ -397,6 +404,8 @@ docker run -d --rm --name plasma6-x11-web \
 **Chromium kiosk: Wayland, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+docker build --pull -f Dockerfile.fedora-44 --target ui-test -t plasma6:fedora-44-test .
 docker run -d --rm --name plasma6-chromium-wayland \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
@@ -405,12 +414,14 @@ docker run -d --rm --name plasma6-chromium-wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44-test
 ```
 
 **Chromium kiosk: X11, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+docker build --pull -f Dockerfile.fedora-44 --target ui-test -t plasma6:fedora-44-test .
 docker run -d --rm --name plasma6-chromium-x11 \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
@@ -419,7 +430,7 @@ docker run -d --rm --name plasma6-chromium-x11 \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44-test
 ```
 
 </details>
@@ -562,6 +573,8 @@ podman run -d --rm --name plasma6-x11-web \
 **Chromium kiosk: Wayland, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+podman build --pull=always --format docker --layers -f Dockerfile.fedora-44 --target ui-test -t plasma6:fedora-44-test .
 podman run -d --rm --name plasma6-chromium-wayland \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
@@ -571,12 +584,14 @@ podman run -d --rm --name plasma6-chromium-wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44-test
 ```
 
 **Chromium kiosk: X11, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+podman build --pull=always --format docker --layers -f Dockerfile.fedora-44 --target ui-test -t plasma6:fedora-44-test .
 podman run -d --rm --name plasma6-chromium-x11 \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
@@ -586,7 +601,7 @@ podman run -d --rm --name plasma6-chromium-x11 \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:fedora-44
+  -p 127.0.0.1:6080:6080 plasma6:fedora-44-test
 ```
 
 </details>
@@ -721,6 +736,8 @@ docker run -d --rm --name plasma6-debian-13-x11-web \
 **Chromium kiosk: Wayland, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+docker build --pull -f Dockerfile.debian-13 --target ui-test -t plasma6:debian-13-test .
 docker run -d --rm --name plasma6-debian-13-chromium-wayland \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
@@ -729,12 +746,14 @@ docker run -d --rm --name plasma6-debian-13-chromium-wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:debian-13
+  -p 127.0.0.1:6080:6080 plasma6:debian-13-test
 ```
 
 **Chromium kiosk: X11, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+docker build --pull -f Dockerfile.debian-13 --target ui-test -t plasma6:debian-13-test .
 docker run -d --rm --name plasma6-debian-13-chromium-x11 \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
@@ -743,7 +762,7 @@ docker run -d --rm --name plasma6-debian-13-chromium-x11 \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:debian-13
+  -p 127.0.0.1:6080:6080 plasma6:debian-13-test
 ```
 
 </details>
@@ -886,6 +905,8 @@ podman run -d --rm --name plasma6-debian-13-x11-web \
 **Chromium kiosk: Wayland, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+podman build --pull=always --format docker --layers -f Dockerfile.debian-13 --target ui-test -t plasma6:debian-13-test .
 podman run -d --rm --name plasma6-debian-13-chromium-wayland \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
@@ -895,12 +916,14 @@ podman run -d --rm --name plasma6-debian-13-chromium-wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:debian-13
+  -p 127.0.0.1:6080:6080 plasma6:debian-13-test
 ```
 
 **Chromium kiosk: X11, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+podman build --pull=always --format docker --layers -f Dockerfile.debian-13 --target ui-test -t plasma6:debian-13-test .
 podman run -d --rm --name plasma6-debian-13-chromium-x11 \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
@@ -910,7 +933,7 @@ podman run -d --rm --name plasma6-debian-13-chromium-x11 \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:debian-13
+  -p 127.0.0.1:6080:6080 plasma6:debian-13-test
 ```
 
 </details>
@@ -1045,6 +1068,8 @@ docker run -d --rm --name plasma6-ubuntu-26.04-x11-web \
 **Chromium kiosk: Wayland, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+docker build --pull -f Dockerfile.ubuntu-26.04 --target ui-test -t plasma6:ubuntu-26.04-test .
 docker run -d --rm --name plasma6-ubuntu-26.04-chromium-wayland \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
@@ -1053,12 +1078,14 @@ docker run -d --rm --name plasma6-ubuntu-26.04-chromium-wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04-test
 ```
 
 **Chromium kiosk: X11, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+docker build --pull -f Dockerfile.ubuntu-26.04 --target ui-test -t plasma6:ubuntu-26.04-test .
 docker run -d --rm --name plasma6-ubuntu-26.04-chromium-x11 \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
@@ -1067,7 +1094,7 @@ docker run -d --rm --name plasma6-ubuntu-26.04-chromium-x11 \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04-test
 ```
 
 </details>
@@ -1210,6 +1237,8 @@ podman run -d --rm --name plasma6-ubuntu-26.04-x11-web \
 **Chromium kiosk: Wayland, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+podman build --pull=always --format docker --layers -f Dockerfile.ubuntu-26.04 --target ui-test -t plasma6:ubuntu-26.04-test .
 podman run -d --rm --name plasma6-ubuntu-26.04-chromium-wayland \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
@@ -1219,12 +1248,14 @@ podman run -d --rm --name plasma6-ubuntu-26.04-chromium-wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04-test
 ```
 
 **Chromium kiosk: X11, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+podman build --pull=always --format docker --layers -f Dockerfile.ubuntu-26.04 --target ui-test -t plasma6:ubuntu-26.04-test .
 podman run -d --rm --name plasma6-ubuntu-26.04-chromium-x11 \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
@@ -1234,7 +1265,7 @@ podman run -d --rm --name plasma6-ubuntu-26.04-chromium-x11 \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04
+  -p 127.0.0.1:6080:6080 plasma6:ubuntu-26.04-test
 ```
 
 </details>
@@ -1312,6 +1343,8 @@ docker run -d --rm --name plasma6-archlinux-web \
 **Chromium kiosk: Wayland, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+docker build --pull -f Dockerfile.archlinux --target ui-test -t plasma6:archlinux-test .
 docker run -d --rm --name plasma6-archlinux-chromium-wayland \
   --privileged --user=0:0 --userns=host --cgroupns=private \
   --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
@@ -1320,7 +1353,7 @@ docker run -d --rm --name plasma6-archlinux-chromium-wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:archlinux
+  -p 127.0.0.1:6080:6080 plasma6:archlinux-test
 ```
 
 </details>
@@ -1397,6 +1430,8 @@ podman run -d --rm --name plasma6-archlinux-web \
 **Chromium kiosk: Wayland, browser / noVNC**
 
 ```bash
+# Build the test-only image containing Chromium.
+podman build --pull=always --format docker --layers -f Dockerfile.archlinux --target ui-test -t plasma6:archlinux-test .
 podman run -d --rm --name plasma6-archlinux-chromium-wayland \
   --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
   --cgroupns=private --pids-limit=8192 --shm-size=512m \
@@ -1406,7 +1441,7 @@ podman run -d --rm --name plasma6-archlinux-chromium-wayland \
   -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
   -e DISPLAY_BACKEND=wayland -e DISPLAY_MODE=web \
   -e TARGET_APP='chromium https://example.org' \
-  -p 127.0.0.1:6080:6080 plasma6:archlinux
+  -p 127.0.0.1:6080:6080 plasma6:archlinux-test
 ```
 
 </details>
@@ -1546,6 +1581,7 @@ Podman, root remains limited to its user namespace.
 | `VNC_PASSWORD` | unset | Password when no file is provided |
 | `VNC_MAX_FPS` | `60` | Remote update rate, 1–60; lower it to reduce CPU/network use |
 | `LIBGL_ALWAYS_SOFTWARE` | `0` | Prefer an accessible GPU; software fallback remains available |
+| `SYSTEMD_MASKED` | `NetworkManager.service` | Base init framework disables and masks these units before boot; comma/space-separated list |
 | `INIT_LOG_LEVEL` | inherited (`2`) | Base framework logging level |
 
 Build arguments: `BASE_IMAGE=ghcr.io/skynet-core/systemd:<distro>` (matching
@@ -1737,7 +1773,8 @@ On a host without a graphical session, append `--skip-nested` to the boot
 commands. For kiosk tests below, append `--modes headless vnc web`. The suites
 detect Arch's Wayland-only support automatically.
 
-The `ui-test` target adds a Qt editor and benchmark to the runtime image. `uv`
+The `ui-test` target adds Chromium, a Qt editor and benchmark to the runtime image.
+These applications are excluded from the published production target. `uv`
 supplies the host RFB/WebSocket and screenshot dependencies. Build and validate
 the test image in the same engine's store:
 

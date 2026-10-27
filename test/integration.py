@@ -80,6 +80,38 @@ def main():
                 if result.returncode:
                     raise RuntimeError(result.stderr)
                 wait_ready(runtime, name)
+                masked = command(
+                    runtime,
+                    "exec",
+                    name,
+                    "systemctl",
+                    "is-enabled",
+                    "NetworkManager.service",
+                )
+                assert masked.stdout.strip() == "masked", masked.stdout + masked.stderr
+                active = command(
+                    runtime,
+                    "exec",
+                    name,
+                    "systemctl",
+                    "is-active",
+                    "NetworkManager.service",
+                )
+                assert active.stdout.strip() == "inactive", (
+                    active.stdout + active.stderr
+                )
+                start = command(
+                    runtime,
+                    "exec",
+                    name,
+                    "systemctl",
+                    "start",
+                    "NetworkManager.service",
+                )
+                (case / "networkmanager.log").write_text(
+                    masked.stdout + active.stdout + start.stdout + start.stderr
+                )
+                assert start.returncode != 0 and "masked" in start.stderr, start.stderr
                 # Assert both the selected default target and absence of remote listeners in local modes.
                 target = command(
                     runtime,

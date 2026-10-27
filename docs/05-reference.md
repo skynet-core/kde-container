@@ -31,7 +31,7 @@ source of truth for behavior; the tables describe their current roles.
 | --- | --- |
 | [Dockerfile.fedora-44](../Dockerfile.fedora-44) | Maintained template; build Fedora production and test targets |
 | [Dockerfile generator](../build/render-dockerfiles.py) | Generate Debian, Ubuntu and Arch Dockerfiles from Fedora; `--check` rejects drift |
-| [Distribution package lists](../build/packages/) | Separate runtime/browser/input/capture dependencies for each package manager |
+| [Distribution package lists](../build/packages/) | Separate runtime, test-only browser, input and capture dependencies for each package manager |
 | [Publishing workflow](../.github/workflows/build-and-publish.yml) | Test AMD64 distro images, retain evidence and publish tested production tags to GHCR |
 | [.dockerignore](../.dockerignore) | Exclude unneeded context, including test artifacts and documentation assets |
 | [config/startkderc](../config/startkderc) | Default Plasma `systemdBoot=false` for the supervised classic session path |
@@ -122,12 +122,17 @@ service; the init module selects the values written into `session.env`.
 | `VNC_MAX_FPS` | `60` | Remote update cadence, validated as an integer from 1 to 60 |
 | `LIBGL_ALWAYS_SOFTWARE` | `0` | Permit preferred GPU rendering, with automatic software fallback |
 | `LANG` | Supplied value or `C.UTF-8` fallback | Locale value written to the service environment |
+| `SYSTEMD_MASKED` | `NetworkManager.service` | Inherited init disables and masks this comma/space-separated unit list before boot |
 | `INIT_LOG_LEVEL` | Base default `2` | Base-framework verbosity: errors through debug |
 
 `PLASMA_UID/GID` are nonzero decimal IDs below 4294967295. Namespace coverage and
 existing-account conflicts can still restrict which valid numbers are usable.
 Host/socket hints are inputs to detection; the generated desktop environment is
 private and does not reuse the host's runtime as its own.
+
+NetworkManager also has a build-time mask, including on images where its package
+is absent. Chromium is installed only by `ui-test`; use an installed executable
+such as `konsole` for `TARGET_APP` in production, or add your own application.
 
 Account password and sudo settings are applied by `300-plasma-user.sh` before
 desktop services start. The launcher treats `PLASMA_PASSWORD_FILE` as a host path

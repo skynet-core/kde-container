@@ -1,7 +1,6 @@
 flowchart TD
     base["Systemd base: Fedora / Debian / Ubuntu / Arch"]
     packages["desktop-packages: packages and account"]
-    applications["application-packages: Chromium kiosk browser"]
     desktop["desktop: scripts, units and defaults"]
     source["input-source: compilers, headers and KRFB sources"]
     build["input-build: KWin plugin and test programs"]
@@ -10,16 +9,15 @@ flowchart TD
     vnc["vnc-build: patched upstream virtual monitor and capture"]
     runtime["runtime: input plus capture and scheduling fixes"]
     final["plasma6: default production image"]
-    ui["ui-test: editor and animation benchmark"]
+    ui["ui-test: Chromium, editor and animation benchmark"]
     baseline["ui-baseline: stock KRFB plus test editor"]
     perfbaseline["ui-perf-baseline: stock KRFB with working input"]
     base -->|FROM| packages
-    packages -->|FROM| applications
-    applications -->|FROM| desktop
+    packages -->|FROM| desktop
     packages -->|FROM| source
     source -->|FROM| build
-    desktop -->|FROM| input
-    desktop -->|FROM| baseline
+    desktop --> input
+    desktop --> baseline
     source -->|FROM| vnc
     build -->|FROM| xtest
     input -->|FROM| runtime

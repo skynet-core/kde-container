@@ -481,7 +481,7 @@ run as the configured startup applications, rather than being added to an alread
 running Plasma desktop.
 
 ```bash
-# HOST: test images include the editor; production includes Chromium only.
+# HOST: only the ui-test image includes Chromium and the test editor.
 docker build -f Dockerfile.fedora-44 --target ui-test -t plasma6:ui-test .
 uv run test/kiosk.py --image plasma6:ui-test
 

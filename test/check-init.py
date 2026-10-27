@@ -3,6 +3,7 @@
 
 import os
 import shlex
+import shutil
 import socket
 import subprocess
 import unittest
@@ -47,6 +48,7 @@ class InitTests(unittest.TestCase):
             "DISPLAY_MODE": "headless",
             "DISPLAY_BACKEND": "auto",
             "VNC_PASSWORD": "testpass",
+            "SYSTEMD_MASKED": os.environ.get("SYSTEMD_MASKED", ""),
             **settings,
         }
         result = subprocess.run(
@@ -106,7 +108,13 @@ class InitTests(unittest.TestCase):
         config = self.boot(TARGET_APP=value)
         self.assertEqual(config["TARGET_APP"], value)
         self.assertEqual(config["XDG_CONFIG_HOME"], "/home/plasma/.config/plasma-kiosk")
-        self.assertEqual(self.boot(TARGET_APP="chromium")["TARGET_APP"], "chromium")
+        if shutil.which("chromium") or shutil.which("chromium-browser"):
+            self.assertEqual(self.boot(TARGET_APP="chromium")["TARGET_APP"], "chromium")
+        else:
+            self.assertIn(
+                "TARGET_APP executable is not available",
+                self.boot(expected=1, TARGET_APP="chromium"),
+            )
         for command in (
             "not-an-installed-application",
             "konsole '",
@@ -122,6 +130,23 @@ class InitTests(unittest.TestCase):
         for value in ("0", "61", "-1", "1.5", "oops"):
             with self.subTest(value=value):
                 self.assertIn("VNC_MAX_FPS", self.boot(expected=1, VNC_MAX_FPS=value))
+
+    def test_networkmanager_mask(self):
+        self.assertEqual(os.environ["SYSTEMD_MASKED"], "NetworkManager.service")
+        for _ in range(2):
+            self.boot(SYSTEMD_INIT_TARGET_WANTS="NetworkManager.service")
+            self.assertEqual(
+                os.readlink("/etc/systemd/system/NetworkManager.service"), "/dev/null"
+            )
+            self.assertIn(
+                "disable NetworkManager.service",
+                Path("/etc/systemd/system-preset/00-systemd-masked.preset")
+                .read_text()
+                .splitlines(),
+            )
+            self.assertFalse(
+                list(Path("/etc/systemd/system").glob("*.wants/NetworkManager.service"))
+            )
 
     def test_plasma_password_and_authenticated_sudo(self):
         self.boot()

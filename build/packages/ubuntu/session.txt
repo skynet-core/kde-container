@@ -1,2 +1,0 @@
-# Ubuntu splits the X11 session launcher out of plasma-workspace.
-plasma-session-x11

@@ -1,5 +1,7 @@
 plasma-desktop
 plasma-workspace
+# Ubuntu splits the X11 session launcher out of plasma-workspace.
+plasma-session-x11
 kwin-wayland
 kwin-x11
 kscreen

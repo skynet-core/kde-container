@@ -3,7 +3,7 @@ flowchart TD
     common["Load common helpers and module definitions"]
     identity["300: prepare account IDs"]
     configure["400: configure mode and credentials"]
-    target["501: link default target"]
+    target["501: link default target and disable/mask units"]
     handoff["999: exec systemd"]
     systemd["systemd now occupies the same PID 1"]
     profile["Activate selected profile"]
