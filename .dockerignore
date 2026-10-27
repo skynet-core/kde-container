@@ -24,4 +24,7 @@
 !patches/**
 !compat/
 !compat/**
+!test/
+!test/egl-fence-stub.cpp
+!test/egl-fence-test.cpp
 **/__pycache__

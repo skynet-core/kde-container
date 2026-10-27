@@ -406,7 +406,7 @@ A desktop portal is a D-Bus-mediated interface for operations such as choosing a
 screen to share or authorizing remote control. A portal session handle identifies
 the resulting session. It is not the same object as a PipeWire stream node ID.
 
-Stock KRFB's [XDP event handler](https://github.com/KDE/krfb/blob/v26.08.1/events/xdp/xdpevents.cpp)
+Stock KRFB's [XDP event handler](https://github.com/KDE/krfb/blob/v26.08.2/events/xdp/xdpevents.cpp)
 uses that handle to request keyboard and pointer actions. The virtual-monitor
 capture path creates its stream directly through KWin and has no such portal
 session. The pointer handler therefore returns without delivering events, and the

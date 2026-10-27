@@ -84,11 +84,13 @@ local files in this checkout.
 | [krfb-low-latency.patch](../patches/krfb-low-latency.patch) | Upstream KRFB scheduling and changed-region capture fixes |
 | [krfb-existing-output.patch](../patches/krfb-existing-output.patch) | Stream Debian's existing virtual monitor through PipeWire, retaining GPU rendering |
 | [xtest-paced.cpp](../compat/xtest-paced.cpp) | Scoped software-path XTest keyboard compatibility library |
+| [egl-fence-wait.cpp](../compat/egl-fence-wait.cpp) | Complete NVIDIA rendering before nested KWin publishes buffers; keep the helper out of child processes |
 | [test.sh](../test/test.sh) | Run static, init, unit-definition and boot checks |
 | [lint.sh](../test/lint.sh) | Run the source linters and formatting checks |
 | [unit.py](../test/unit.py) | Host regressions for launcher arguments, shared helpers and kiosk process cleanup |
 | [support.py](../test/support.py) | Shared host launcher setup, backend detection, readiness, software-device options and retained logs |
 | [check-init.py](../test/check-init.py) | Test the real inherited init framework inside a disposable image instance |
+| [egl-fence-stub.cpp](../test/egl-fence-stub.cpp), [egl-fence-test.cpp](../test/egl-fence-test.cpp) | Build-time checks of fence readiness, descriptor ownership, Mesa behavior and child environment restoration |
 | [integration.py](../test/integration.py) | Start the mode matrix through the host launcher and preserve evidence |
 | [rfb.py](../test/rfb.py) | Shared RFB client with authentication, screenshots and input events |
 | [capture-vnc.py](../test/capture-vnc.py) | Authenticate and capture substantial framebuffer content |
@@ -156,6 +158,7 @@ written into `session.env`. `/etc/sudoers` includes the managed root-owned
 | `WAYLAND_DISPLAY` | `wayland-0` for the private Wayland service environment |
 | `PLASMA_X11_DISPLAY` | Private X11 display, normally `:100` |
 | `PLASMA_SOFTWARE_CAPTURE` | `1` selects private Xvfb capture for older KWin's Wayland software mode; Arch retains OpenGL/PipeWire with `0` |
+| `PLASMA_NVIDIA_SYNC` | Computed as `1` for GPU-backed nested Wayland sessions with usable NVIDIA hardware; enables KWin-only fence completion |
 | `PLASMA_SOFTWARE_DISPLAY` | Private Xvfb parent display for that fallback, normally `:110` |
 | `QT_QUICK_BACKEND` | Set to `software` during software fallback |
 | `XDG_CONFIG_HOME` in kiosk mode | Isolated `/home/plasma/.config/plasma-kiosk` settings/profile directory |
@@ -337,5 +340,5 @@ points when extending the implementation:
 - [RFB protocol, RFC 6143](https://www.rfc-editor.org/rfc/rfc6143.html)
 - [WebSocket protocol, RFC 6455](https://www.rfc-editor.org/rfc/rfc6455.html)
 - [noVNC](https://github.com/novnc/noVNC)
-- [KRFB source at the header version used by the build](https://github.com/KDE/krfb/tree/v26.08.1)
+- [KRFB source at the header version used by the build](https://github.com/KDE/krfb/tree/v26.08.2)
 - [KWin fake-input implementation for the Plasma 6.7 branch](https://github.com/KDE/kwin/blob/Plasma/6.7/src/backends/fakeinput/fakeinputbackend.cpp)

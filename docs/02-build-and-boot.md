@@ -61,7 +61,7 @@ files without making the build stage the final runtime filesystem.
 | `desktop` | Packages plus scripts, units and defaults | Common runtime foundation |
 | `input-source` | Development tools and checksum-verified KRFB sources | Common foundation for independent input and capture builds |
 | `input-build` | `input-source` plus the project's native source | Compile the KWin event plugin and Qt test programs |
-| `xtest-build` | `input-build` plus a small XTest compatibility library | Preserve rapid keyboard modifiers on the software capture path |
+| `compat-build` | `input-build` plus scoped compatibility libraries and native regression checks | Preserve software-path keyboard modifiers and complete NVIDIA frames before nested presentation |
 | `input-runtime` | `desktop` plus `kwin.so` and its desktop permission | Working remote input with the distribution's original KRFB |
 | `vnc-build` | `input-source` plus upstream build dependencies | Build the patched virtual monitor and PipeWire capture plugin |
 | `runtime` | `input-runtime` plus those two patched artifacts | Complete desktop with input and performance fixes |

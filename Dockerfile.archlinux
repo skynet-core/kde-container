@@ -67,8 +67,8 @@ CMD ["/usr/sbin/init", "--system"]
 FROM desktop-packages AS input-source
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 COPY build/packages/arch/input-build.txt /build-support/packages/input-build.txt
-ARG KRFB_SOURCE_VERSION=26.08.1
-ARG KRFB_SOURCE_SHA256=fb2e89fb9defdf5d3acd1cac172863b0adc45793961210c152ef3872fb875f5d
+ARG KRFB_SOURCE_VERSION=26.08.2
+ARG KRFB_SOURCE_SHA256=4f613500a2308f5b16b109ee4f113a69ea597cd03bdb19f8b6abd16ab914593e
 RUN /build-support/install-packages input-build \
     && curl --fail --location --retry 3 \
         "https://codeload.github.com/KDE/krfb/tar.gz/refs/tags/v${KRFB_SOURCE_VERSION}" \
@@ -83,18 +83,24 @@ RUN cmake -S /src -B /build -G Ninja -DKRFB_SOURCE_DIR=/krfb-source \
     && cmake --build /build \
     && bash /build-support/collect-artifacts input
 
-FROM input-build AS xtest-build
-COPY compat/xtest-paced.cpp /src/xtest-paced.cpp
-RUN c++ -shared -fPIC -O2 /src/xtest-paced.cpp -ldl -o /xtest-paced.so
+FROM input-build AS compat-build
+COPY compat/ /src/compat/
+COPY test/egl-fence-stub.cpp test/egl-fence-test.cpp /src/tests/
+RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -ldl -o /xtest-paced.so \
+    && c++ -shared -fPIC -O2 /src/compat/egl-fence-wait.cpp -ldl -o /egl-fence-wait.so \
+    && mkdir /fake-egl \
+    && c++ -shared -fPIC -O2 /src/tests/egl-fence-stub.cpp -pthread -o /fake-egl/libEGL.so.1 \
+    && c++ -O2 /src/tests/egl-fence-test.cpp -ldl -o /test-egl-fence \
+    && LD_LIBRARY_PATH=/fake-egl python3 -c 'import os, subprocess; [subprocess.run(["/test-egl-fence", "/egl-fence-wait.so"], env={**os.environ, "FAKE_EGL_VENDOR": vendor}, timeout=5, check=True) for vendor in ("NVIDIA", "Mesa")]'
 
 # Baseline target intentionally retains stock KRFB, for reproducing the regression.
 FROM desktop AS ui-baseline
 COPY --from=input-build /build/plasma-ui-fixture /usr/local/bin/plasma-ui-fixture
-COPY --from=xtest-build /xtest-paced.so /usr/local/lib/plasma6/xtest-paced.so
+COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /usr/local/lib/plasma6/
 
 FROM desktop AS input-runtime
 COPY --from=input-build /out/root/ /
-COPY --from=xtest-build /xtest-paced.so /usr/local/lib/plasma6/xtest-paced.so
+COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /usr/local/lib/plasma6/
 RUN sed -i '/^X-KDE-Wayland-Interfaces=/s/$/,org_kde_kwin_fake_input/' \
         /usr/share/applications/org.kde.krfb.virtualmonitor.desktop
 

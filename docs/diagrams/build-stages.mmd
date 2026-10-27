@@ -4,7 +4,7 @@ flowchart TD
     desktop["desktop: scripts, units and defaults"]
     source["input-source: compilers, headers and KRFB sources"]
     build["input-build: KWin plugin and test programs"]
-    xtest["xtest-build: software keyboard compatibility"]
+    xtest["compat-build: input pacing and GPU fences"]
     input["input-runtime: KWin input plugin and permission"]
     vnc["vnc-build: patched upstream virtual monitor and capture"]
     runtime["runtime: input plus capture and scheduling fixes"]
@@ -23,8 +23,8 @@ flowchart TD
     input -->|FROM| runtime
     input -->|FROM| perfbaseline
     build -. "COPY kwin.so" .-> input
-    xtest -. "COPY xtest-paced.so" .-> input
-    xtest -. "COPY xtest-paced.so" .-> baseline
+    xtest -. "COPY compatibility libraries" .-> input
+    xtest -. "COPY compatibility libraries" .-> baseline
     vnc -. "COPY executable and pw.so" .-> runtime
     build -. "COPY test editor" .-> baseline
     build -. "COPY benchmark" .-> perfbaseline

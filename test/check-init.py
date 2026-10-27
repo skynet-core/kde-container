@@ -125,6 +125,34 @@ class InitTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn("TARGET_APP", self.boot(expected=1, TARGET_APP=command))
 
+    def test_nvidia_nested_sync_scoping(self):
+        self.assertEqual(self.boot()["PLASMA_NVIDIA_SYNC"], "0")
+        with socket.socket(socket.AF_UNIX) as fixture:
+            path = "/tmp/plasma-test-fence-wayland"
+            Path(path).unlink(missing_ok=True)
+            fixture.bind(path)
+            settings = {
+                "DISPLAY_BACKEND": "wayland",
+                "DISPLAY_MODE": "nested",
+                "HOST_WAYLAND_DISPLAY": path,
+            }
+            config = self.boot(**settings)
+            devices = json.loads(Path("/etc/plasma/gpu.json").read_text())["devices"]
+            nvidia = any(
+                device.get("hardware") and device.get("vendor", "").startswith("NVIDIA")
+                for device in devices
+            )
+            self.assertEqual(config["PLASMA_NVIDIA_SYNC"], str(int(nvidia)))
+            self.assertNotIn("LD_PRELOAD", config)
+            self.assertNotIn("PLASMA_KWIN_ORIGINAL_LD_PRELOAD", config)
+            if nvidia:
+                self.assertNotIn(
+                    "security.capability", os.listxattr("/usr/bin/kwin_wayland")
+                )
+            config = self.boot(**settings, LIBGL_ALWAYS_SOFTWARE="1")
+            self.assertEqual(config["PLASMA_NVIDIA_SYNC"], "0")
+            Path(path).unlink()
+
     def test_vnc_frame_rate(self):
         self.assertEqual(self.boot()["VNC_MAX_FPS"], "60")
         self.assertEqual(self.boot(VNC_MAX_FPS="30")["VNC_MAX_FPS"], "30")

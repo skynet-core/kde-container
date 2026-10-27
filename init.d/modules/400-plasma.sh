@@ -123,6 +123,28 @@ module_plasma_run() {
 		printf '{"devices": [], "forced_software": true}\n' >/etc/plasma/gpu.json
 	fi
 	chmod 644 /etc/plasma/gpu.json
+	local nvidia_sync=0
+	if [[ $mode == nested && $backend == wayland && $software == 0 ]]; then
+		# A file capability makes the loader ignore the scoped KWin preload.
+		nvidia_sync=$(python3 - <<'PYTHON'
+import errno
+import json
+import os
+
+with open("/etc/plasma/gpu.json", encoding="utf-8") as stream:
+    devices = json.load(stream)["devices"]
+enabled = any(device.get("hardware") and
+              device.get("vendor", "").startswith("NVIDIA") for device in devices)
+if enabled:
+    try:
+        os.removexattr("/usr/bin/kwin_wayland", "security.capability")
+    except OSError as error:
+        if error.errno != errno.ENODATA:
+            raise
+print(int(enabled))
+PYTHON
+		) || die 'Cannot prepare nested NVIDIA synchronization'
+	fi
 	chmod 1777 /tmp/.X11-unix
 	# Copy host cookies without binding them to the host's hostname.
 	if [[ -n $host_x11 && -n $host_xauthority && -r $host_xauthority ]]; then
@@ -207,6 +229,7 @@ module_plasma_run() {
 			plasma_write_env WAYLAND_DISPLAY wayland-0
 			plasma_write_env QT_QPA_PLATFORM wayland
 		fi
+		plasma_write_env PLASMA_NVIDIA_SYNC "$nvidia_sync"
 		plasma_write_env LIBGL_ALWAYS_SOFTWARE "$software"
 		if [[ $software == 1 ]]; then
 			plasma_write_env QT_QUICK_BACKEND software

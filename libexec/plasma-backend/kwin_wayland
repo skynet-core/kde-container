@@ -35,4 +35,8 @@ elif [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
 else
     args+=(--virtual)
 fi
+if [[ ${PLASMA_NVIDIA_SYNC:-0} == 1 ]]; then
+    export PLASMA_KWIN_ORIGINAL_LD_PRELOAD=${LD_PRELOAD:-}
+    export LD_PRELOAD="/usr/local/lib/plasma6/egl-fence-wait.so${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
 exec /usr/bin/kwin_wayland "${args[@]}" "$@"

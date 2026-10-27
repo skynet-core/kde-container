@@ -1588,7 +1588,7 @@ Podman, root remains limited to its user namespace.
 Build arguments: `BASE_IMAGE=ghcr.io/skynet-core/systemd:<distro>` (matching
 the selected distribution Dockerfile),
 `PLASMA_UID=1000`, `PLASMA_GID=1000`, `NOVNC_VERSION=1.7.0`, `NOVNC_SHA256`,
-`KRFB_SOURCE_VERSION=26.08.1`, `KRFB_SOURCE_SHA256`. For a locally built base,
+`KRFB_SOURCE_VERSION=26.08.2`, `KRFB_SOURCE_SHA256`. For a locally built base,
 use the matching Dockerfile and base tag, for example
 `docker build -f Dockerfile.debian-13 --build-arg BASE_IMAGE=systemd:debian-13 -t plasma6:debian-13 .`.
 Update checksums together with source
@@ -1610,7 +1610,7 @@ cleanup to prevent Xwayland claiming the host display number.
 
 ### Wayland remote input
 
-Stock [KRFB's XDP event handler](https://github.com/KDE/krfb/blob/v26.08.1/events/xdp/xdpevents.cpp)
+Stock [KRFB's XDP event handler](https://github.com/KDE/krfb/blob/v26.08.2/events/xdp/xdpevents.cpp)
 requires a portal session handle. `krfb-virtualmonitor` creates its output directly
 through KWin's screencast protocol and has no such session, so that handler cannot
 supply keyboard or mouse control.
@@ -1658,6 +1658,23 @@ Init makes injected NVIDIA GBM backends discoverable in the container's library
 directory. This handles an Arch host using `/usr/lib/gbm` with a Fedora image using
 `/usr/lib64/gbm`, which otherwise can produce a black nested window and llvmpipe.
 AMD and Intel use the packaged Mesa drivers and exposed `/dev/dri` nodes.
+
+Nested NVIDIA rendering also waits for the GPU's render fence before KWin hands
+raw buffers to the host. This prevents completed window contents from blinking
+or disappearing on the monitor while window recordings look correct. Rendering
+stays on NVIDIA; no software renderer or different OpenGL API is forced. Init
+enables this only for GPU-backed nested Wayland sessions with usable NVIDIA
+hardware. The compatibility library loads into KWin alone, and restores the
+application environment before Xwayland or session applications start.
+
+For buffer formats, fences, video-capture limitations and diagnostic commands,
+see [the graphics debugging guide](docs/06-graphics-debugging.md).
+
+On the tested NVIDIA 615.78.08 driver, Debian 13's KWin 6.3.6 has a separate
+virtual-output framebuffer failure in Wayland VNC/web mode. It also occurs in
+the image before the nested synchronization fix. NVIDIA nested mode passes on
+Debian; use the Fedora, Ubuntu or Arch image for the validated NVIDIA remote
+path. Debian remote mode was validated with AMD/Mesa.
 
 ```bash
 # NVIDIA: Wayland Plasma inside the host X11/Xwayland window.
@@ -1765,10 +1782,10 @@ archive used by the Dockerfiles:
 ```bash
 mkdir -p test/.artifacts/lint/krfb-source
 curl --fail --location --retry 3 \
-  https://codeload.github.com/KDE/krfb/tar.gz/refs/tags/v26.08.1 \
+  https://codeload.github.com/KDE/krfb/tar.gz/refs/tags/v26.08.2 \
   --output test/.artifacts/lint/krfb.tar.gz
 printf '%s  %s\n' \
-  fb2e89fb9defdf5d3acd1cac172863b0adc45793961210c152ef3872fb875f5d \
+  4f613500a2308f5b16b109ee4f113a69ea597cd03bdb19f8b6abd16ab914593e \
   test/.artifacts/lint/krfb.tar.gz | sha256sum --check -
 tar -xzf test/.artifacts/lint/krfb.tar.gz --strip-components=1 \
   -C test/.artifacts/lint/krfb-source
