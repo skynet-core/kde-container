@@ -40,7 +40,7 @@ for file in "${cpp_files[@]}"; do
 done
 clang-tidy --quiet -p build native/*.cpp
 clang-tidy --quiet compat/*.cpp -- -std=c++17
-xmllint --noout --dtdvalid /usr/share/wayland/wayland.dtd native/fake-input.xml
+xmllint --noout --dtdvalid /usr/share/wayland/wayland.dtd native/*.xml
 xmllint --noout docs/diagrams/*.svg
 python3 -m json.tool docs/diagrams/config.json > /dev/null
 printf 'PASS: ShellCheck, Ruff, Hadolint, actionlint, clang-format, clangd, clang-tidy, XML and JSON.\n'

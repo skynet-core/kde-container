@@ -2,4 +2,6 @@
 Description=Plasma 6 wayland nested desktop
 Requires=multi-user.target plasma-session.service
 After=multi-user.target plasma-session.service
+Wants=plasma-clipboard.service
+After=plasma-clipboard.service
 AllowIsolate=yes

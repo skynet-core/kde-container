@@ -1,0 +1,8 @@
+flowchart LR
+    host["Host application"] <--> hostclip["Host clipboard"]
+    hostclip <--> outside["Host endpoint: data-control or X11"]
+    outside <-->|"MIME bytes over pipes"| relay["Container clipboard controller"]
+    relay <-->|"MIME bytes over pipes"| inside["Desktop endpoint: data-control or X11"]
+    inside <--> innerclip["Private clipboard"]
+    innerclip <--> app["Container application"]
+    service["Nested target starts clipboard service"] -.-> relay

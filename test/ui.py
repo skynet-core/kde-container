@@ -32,8 +32,8 @@ EXPECTED = (
 BANNER = (18, 210, 178)
 
 
-def banner_box(image):
-    difference = ImageChops.difference(image, Image.new("RGB", image.size, BANNER))
+def banner_box(image, color=BANNER):
+    difference = ImageChops.difference(image, Image.new("RGB", image.size, color))
     red, green, blue = difference.split()
     maximum = ImageChops.lighter(ImageChops.lighter(red, green), blue)
     mask = maximum.point(lambda value: 255 if value <= 3 else 0)

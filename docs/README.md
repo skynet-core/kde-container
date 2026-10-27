@@ -18,6 +18,7 @@ terms it uses. For ready-to-run commands for every mode, keep the
 | [4. Operating, diagnosing and testing](04-operation-and-testing.md) | An annotated first run, logs, troubleshooting and the screenshot/file-based UI tests |
 | [5. Reference and glossary](05-reference.md) | File map, environment variables, paths, ports, tools and terms |
 | [6. EGL, GBM and nested graphics debugging](06-graphics-debugging.md) | GPU contexts, DMA-BUF formats, fences, input events and capture limitations |
+| [7. Nested clipboard](07-clipboard.md) | Clipboard protocols, MIME payloads, startup, configuration and GUI validation |
 | [Diagram sources and rendering](diagrams/README.md) | Editable Mermaid sources and reproducible SVG generation |
 
 If you are investigating a particular problem, start with

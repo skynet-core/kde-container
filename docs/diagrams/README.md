@@ -24,6 +24,7 @@ need Node.js, Chromium or a Mermaid plugin just to read the checked-in diagrams.
 | RFB handshake | Negotiation, authentication, pixels and input | [Mermaid](rfb-handshake.mmd) | [Image](rfb-handshake.svg) |
 | UI test | Screenshot-based drag and UI save through a host file mount | [Mermaid](ui-test.mmd) | [Image](ui-test.svg) |
 | Kiosk | Optional application session, fullscreen configuration and restart | [Mermaid](kiosk.mmd) | [Image](kiosk.svg) |
+| Clipboard | Host and private clipboard connections and service lifecycle | [Mermaid](clipboard.mmd) | [Image](clipboard.svg) |
 
 ## Reading the arrows
 

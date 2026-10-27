@@ -140,6 +140,15 @@ jobs:
           uv run test/ui.py --image "$UI_IMAGE" --backends "${backends[@]}" 2>&1 | tee test/.artifacts/ui.log
           uv run test/kiosk.py --image "$UI_IMAGE" --backends "${backends[@]}" --modes vnc web 2>&1 | tee test/.artifacts/kiosk.log
 
+      - name: Verify nested clipboard and GUI copy-paste
+        run: |
+          # The parent desktop is another disposable container, so no host GUI
+          # or access to the runner user's clipboard is required.
+          read -r -a backends <<< "$TEST_BACKENDS"
+          uv run test/clipboard.py --image "$UI_IMAGE" --backends "${backends[@]}" \
+              --host-backends "${backends[@]}" \
+              --no-gpu 2>&1 | tee test/.artifacts/clipboard.log
+
       - name: Log in to GHCR
         if: steps.registry.outputs.publish == 'true'
         uses: docker/login-action@v4
@@ -166,7 +175,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: validation-${{ matrix.distro }}
-          path: test/.artifacts/
+          path: |
+            test/.artifacts/
+            !test/.artifacts/**/runtime/**
+            !test/.artifacts/**/x11/**
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14

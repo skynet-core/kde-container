@@ -63,6 +63,8 @@ local files in this checkout.
 | --- | --- |
 | [plasma-gpu](../libexec/plasma-gpu) | Probe GBM/EGL hardware contexts per render node and retain startup diagnostics |
 | [plasma-host-display](../libexec/plasma-host-display) | Prepare host X11 alias and display lock after tmpfiles |
+| [plasma-clipboard.service](../systemd/system/plasma-clipboard.service) | Nested clipboard lifecycle and optional activation |
+| [clipboard.cpp](../native/clipboard.cpp) | Wayland/X11 clipboard endpoints and loop-free MIME relay |
 | [plasma-session](../libexec/plasma-session) | Start the correct Plasma session; put the KWin adapter on the Wayland session's PATH |
 | [plasma-backend/kwin_wayland](../libexec/plasma-backend/kwin_wayland) | Add virtual/nested backend arguments and preserve wrapper descriptors |
 | [plasma-xserver](../libexec/plasma-xserver) | Start Xvfb, rootful Xwayland or Xephyr |
@@ -94,6 +96,8 @@ local files in this checkout.
 | [integration.py](../test/integration.py) | Start the mode matrix through the host launcher and preserve evidence |
 | [rfb.py](../test/rfb.py) | Shared RFB client with authentication, screenshots and input events |
 | [capture-vnc.py](../test/capture-vnc.py) | Authenticate and capture substantial framebuffer content |
+| [clipboard.py](../test/clipboard.py) | Isolated clipboard protocol, Qt/Chromium UI image and text paste, screenshot and host-file validation |
+| [clipboard-browser.py](../test/clipboard-browser.py) | Local image paste page and receiver for Chromium regression tests |
 | [ui.py](../test/ui.py) | Measure dragging and verify UI text saved through a host file bind |
 | [kiosk.py](../test/kiosk.py) | Validate single-app sessions, actual Chromium, input and restart |
 | [plasma-target-app](../libexec/plasma-target-app) | Validate arguments, configure fullscreen rules and supervise the kiosk app |
@@ -124,6 +128,7 @@ service; the init module selects the values written into `session.env`.
 | `VNC_PASSWORD` | Unset | Password source when no file is supplied |
 | `VNC_MAX_FPS` | `60` | Remote update cadence, validated as an integer from 1 to 60 |
 | `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility,graphics,display` | Toolkit library capabilities, applied before init when GPU injection is requested |
+| `CLIPBOARD_SYNC` | `1` | Enable nested clipboard/primary sharing; `0` disables it; other modes force it off |
 | `LIBGL_ALWAYS_SOFTWARE` | `0` | Permit preferred GPU rendering, with automatic software fallback |
 | `LANG` | Supplied value or `C.UTF-8` fallback | Locale value written to the service environment |
 | `SYSTEMD_MASKED` | `NetworkManager.service` | Inherited init disables and masks this comma/space-separated unit list before boot |

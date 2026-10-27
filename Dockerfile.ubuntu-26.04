@@ -94,6 +94,7 @@ RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -ldl -o /xtest-paced.so \
 
 # Baseline target intentionally retains stock KRFB, for reproducing the regression.
 FROM desktop AS ui-baseline
+COPY --from=input-build /build/plasma-clipboard /usr/local/libexec/plasma-clipboard
 COPY --from=input-build /build/plasma-ui-fixture /usr/local/bin/plasma-ui-fixture
 COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /usr/local/lib/plasma6/
 

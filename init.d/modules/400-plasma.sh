@@ -25,6 +25,9 @@ module_plasma_run() {
 		runuser -u plasma -- /usr/local/libexec/plasma-target-app --validate || die 'Invalid TARGET_APP'
 	fi
 	[[ ${VNC_MAX_FPS:-60} =~ ^([1-9]|[1-5][0-9]|60)$ ]] || die 'VNC_MAX_FPS must be an integer between 1 and 60'
+	local clipboard=${CLIPBOARD_SYNC:-1}
+	[[ $clipboard == 0 || $clipboard == 1 ]] || die 'CLIPBOARD_SYNC must be 0 or 1'
+	[[ $mode == nested ]] || clipboard=0
 	local software=${LIBGL_ALWAYS_SOFTWARE:-0}
 	[[ $software == 0 || $software == 1 ]] || die 'LIBGL_ALWAYS_SOFTWARE must be 0 or 1'
 	for number in "${DISPLAY_WIDTH:-1920}" "${DISPLAY_HEIGHT:-1080}"; do
@@ -230,6 +233,7 @@ PYTHON
 			plasma_write_env QT_QPA_PLATFORM wayland
 		fi
 		plasma_write_env PLASMA_NVIDIA_SYNC "$nvidia_sync"
+		plasma_write_env CLIPBOARD_SYNC "$clipboard"
 		plasma_write_env LIBGL_ALWAYS_SOFTWARE "$software"
 		if [[ $software == 1 ]]; then
 			plasma_write_env QT_QUICK_BACKEND software

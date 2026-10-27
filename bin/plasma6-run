@@ -17,6 +17,7 @@ args=(run --rm --name "${CONTAINER_NAME:-plasma6}" --user=0:0 --privileged --cgr
 	-e "DISPLAY_MODE=$mode" -e "DISPLAY_BACKEND=$backend"
 	-e "DISPLAY_WIDTH=${DISPLAY_WIDTH:-1920}" -e "DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-1080}")
 args+=(-e "VNC_MAX_FPS=${VNC_MAX_FPS:-60}")
+args+=(-e "CLIPBOARD_SYNC=${CLIPBOARD_SYNC:-1}")
 if [[ -n ${TARGET_APP:-} ]]; then args+=(-e "TARGET_APP=$TARGET_APP"); fi
 if [[ -n ${PLASMA_PASSWORD_FILE:-} ]]; then
 	plasma_password_file=$(realpath -- "$PLASMA_PASSWORD_FILE")

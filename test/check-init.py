@@ -99,6 +99,20 @@ class InitTests(unittest.TestCase):
                         )
                     Path(path).unlink()
 
+    def test_clipboard_sync_scoping(self):
+        self.assertEqual(self.boot()["CLIPBOARD_SYNC"], "0")
+        with socket.socket(socket.AF_UNIX) as fixture:
+            path = "/tmp/plasma-test-clipboard-wayland"
+            Path(path).unlink(missing_ok=True)
+            fixture.bind(path)
+            settings = {"DISPLAY_MODE": "nested", "HOST_WAYLAND_DISPLAY": path}
+            self.assertEqual(self.boot(**settings)["CLIPBOARD_SYNC"], "1")
+            self.assertEqual(
+                self.boot(**settings, CLIPBOARD_SYNC="0")["CLIPBOARD_SYNC"], "0"
+            )
+            Path(path).unlink()
+        self.assertIn("CLIPBOARD_SYNC", self.boot(expected=1, CLIPBOARD_SYNC="yes"))
+
     def test_no_host_defaults_to_wayland(self):
         self.assertEqual(self.boot()["DISPLAY_BACKEND"], "wayland")
 

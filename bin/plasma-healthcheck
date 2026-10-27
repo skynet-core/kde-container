@@ -34,6 +34,8 @@ units = [
     "plasma-session.service",
 ]
 probes = ["desktop"]
+if environment["DISPLAY_MODE"] == "nested" and environment.get("CLIPBOARD_SYNC") == "1":
+    units.append("plasma-clipboard.service")
 if environment["DISPLAY_MODE"] in ("vnc", "web"):
     units.append("plasma-vnc.service")
     probes.append("vnc")

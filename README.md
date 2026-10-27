@@ -1580,6 +1580,7 @@ Podman, root remains limited to its user namespace.
 | `VNC_PASSWORD_FILE` | unset | Password file; takes precedence over `VNC_PASSWORD` |
 | `VNC_PASSWORD` | unset | Password when no file is provided |
 | `VNC_MAX_FPS` | `60` | Remote update rate, 1–60; lower it to reduce CPU/network use |
+| `CLIPBOARD_SYNC` | `1` | Share clipboard and primary selection in nested mode; set `0` to disable |
 | `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility,graphics,display` | NVIDIA toolkit capabilities requested before init; GPU devices still require `--gpus` |
 | `LIBGL_ALWAYS_SOFTWARE` | `0` | Prefer an accessible GPU; software fallback remains available |
 | `SYSTEMD_MASKED` | `NetworkManager.service` | Base init framework disables and masks these units before boot; comma/space-separated list |
@@ -1607,6 +1608,22 @@ adapter adds backend arguments while preserving KDE's socket descriptors. Host
 sockets remain separate from `/run/plasma`. Host X11 cookies are normalized for the
 container hostname; socket aliases and display locks are prepared after tmpfiles
 cleanup to prevent Xwayland claiming the host display number.
+
+### Nested clipboard sharing
+
+Nested desktops automatically share text, HTML, images and other MIME data with
+host applications in both directions, including primary selection where supported.
+The same behavior applies to `TARGET_APP` kiosk sessions. No additional host
+service is needed. Set `-e CLIPBOARD_SYNC=0` to disable it.
+
+Screenshots from Spectacle use a single lossless PNG transfer, preserving
+transparency without requesting every image encoder advertised by Qt. Image
+pasting works in image-capable applications such as Chromium.
+
+The bridge uses Wayland data-control or X11 selections through the supplied
+sockets. File URI selections require shared paths; file contents are not copied
+between filesystem namespaces. See the [clipboard guide](docs/07-clipboard.md)
+for host compatibility, X11 fallback mounts and diagnostics.
 
 ### Wayland remote input
 
@@ -1857,6 +1874,7 @@ the test image in the same engine's store:
 ```bash
 docker build -f Dockerfile.fedora-44 --target ui-test -t plasma6:fedora-44-test .
 uv run test/ui.py --runtime docker --image plasma6:fedora-44-test
+uv run test/clipboard.py --runtime docker --image plasma6:fedora-44-test
 uv run test/kiosk.py --runtime docker --image plasma6:fedora-44-test
 ```
 
@@ -1865,6 +1883,7 @@ uv run test/kiosk.py --runtime docker --image plasma6:fedora-44-test
 ```bash
 docker build -f Dockerfile.debian-13 --target ui-test -t plasma6:debian-13-test .
 uv run test/ui.py --runtime docker --image plasma6:debian-13-test
+uv run test/clipboard.py --runtime docker --image plasma6:debian-13-test
 uv run test/kiosk.py --runtime docker --image plasma6:debian-13-test
 ```
 
@@ -1873,6 +1892,7 @@ uv run test/kiosk.py --runtime docker --image plasma6:debian-13-test
 ```bash
 docker build -f Dockerfile.ubuntu-26.04 --target ui-test -t plasma6:ubuntu-26.04-test .
 uv run test/ui.py --runtime docker --image plasma6:ubuntu-26.04-test
+uv run test/clipboard.py --runtime docker --image plasma6:ubuntu-26.04-test
 uv run test/kiosk.py --runtime docker --image plasma6:ubuntu-26.04-test
 ```
 
@@ -1881,6 +1901,7 @@ uv run test/kiosk.py --runtime docker --image plasma6:ubuntu-26.04-test
 ```bash
 docker build -f Dockerfile.archlinux --target ui-test -t plasma6:archlinux-test .
 uv run test/ui.py --runtime docker --image plasma6:archlinux-test
+uv run test/clipboard.py --runtime docker --image plasma6:archlinux-test
 uv run test/kiosk.py --runtime docker --image plasma6:archlinux-test
 ```
 
@@ -1894,6 +1915,7 @@ uv run test/kiosk.py --runtime docker --image plasma6:archlinux-test
 ```bash
 podman build --format docker --layers -f Dockerfile.fedora-44 --target ui-test -t plasma6:fedora-44-test .
 uv run test/ui.py --runtime podman --image plasma6:fedora-44-test
+uv run test/clipboard.py --runtime podman --image plasma6:fedora-44-test
 uv run test/kiosk.py --runtime podman --image plasma6:fedora-44-test
 ```
 
@@ -1902,6 +1924,7 @@ uv run test/kiosk.py --runtime podman --image plasma6:fedora-44-test
 ```bash
 podman build --format docker --layers -f Dockerfile.debian-13 --target ui-test -t plasma6:debian-13-test .
 uv run test/ui.py --runtime podman --image plasma6:debian-13-test
+uv run test/clipboard.py --runtime podman --image plasma6:debian-13-test
 uv run test/kiosk.py --runtime podman --image plasma6:debian-13-test
 ```
 
@@ -1910,6 +1933,7 @@ uv run test/kiosk.py --runtime podman --image plasma6:debian-13-test
 ```bash
 podman build --format docker --layers -f Dockerfile.ubuntu-26.04 --target ui-test -t plasma6:ubuntu-26.04-test .
 uv run test/ui.py --runtime podman --image plasma6:ubuntu-26.04-test
+uv run test/clipboard.py --runtime podman --image plasma6:ubuntu-26.04-test
 uv run test/kiosk.py --runtime podman --image plasma6:ubuntu-26.04-test
 ```
 
@@ -1918,6 +1942,7 @@ uv run test/kiosk.py --runtime podman --image plasma6:ubuntu-26.04-test
 ```bash
 podman build --format docker --layers -f Dockerfile.archlinux --target ui-test -t plasma6:archlinux-test .
 uv run test/ui.py --runtime podman --image plasma6:archlinux-test
+uv run test/clipboard.py --runtime podman --image plasma6:archlinux-test
 uv run test/kiosk.py --runtime podman --image plasma6:archlinux-test
 ```
 
