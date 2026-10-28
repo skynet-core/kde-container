@@ -14,7 +14,6 @@ import subprocess
 import threading
 import time
 import traceback
-import uuid
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -58,7 +57,7 @@ def display_environment(config):
 
 
 class Probe:
-    def __init__(self, runtime, name, config, log, identity=None):
+    def __init__(self, runtime, name, config, log):
         self.messages = queue.Queue()
         self.latest = {}
         self.log = log.open("w")
@@ -74,7 +73,6 @@ class Probe:
                 "/usr/local/libexec/plasma-clipboard",
                 "--endpoint",
                 config["DISPLAY_BACKEND"],
-                identity or str(uuid.uuid4()),
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -242,13 +240,45 @@ def image_checks(
     parent_client.click(box[0] + 100, box[1] + 20)
     parent_client.chord(0xFFE3, ord("c"))
     expected = expected_image(publisher=True)
-    (case / "images" / "host-qt.png").write_bytes(host_probe.wait_image(expected))
+    png = host_probe.wait_image(expected)
+    (case / "images" / "host-qt.png").write_bytes(png)
     inner_probe.wait_image(expected)
-    # The source Qt window hides after copying; the nested image editor is focused again.
-    time.sleep(0.5)
-    screenshot = client.screenshot()
-    box = banner_box(screenshot)
-    assert box, "Image paste fixture did not appear"
+    # Cache the real Qt offer before closing its producer, leaving only the
+    # nested editor visible for the subsequent paste.
+    payload = {
+        "image/png": png,
+        "application/x-kde-suggestedfilename": b"Dolphin screenshot.png",
+    }
+    host_probe.set(payload)
+    stopped = run(
+        runtime,
+        "exec",
+        "--user=plasma",
+        outer,
+        "python3",
+        "-c",
+        """
+from pathlib import Path
+import os, signal
+for path in Path('/proc').glob('[0-9]*'):
+    try:
+        args = (path / 'cmdline').read_bytes().split(bytes([0]))
+        if args[0].split(b' ', 1)[0].rsplit(b'/', 1)[-1] == b'plasma-ui-fixture' and b'--publish-image' in args:
+            os.kill(int(path.name), signal.SIGTERM)
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+""",
+    )
+    assert stopped.returncode == 0, stopped.stderr
+    # Wait for a fresh frame after the producer exits.
+    deadline = time.monotonic() + 15
+    while True:
+        screenshot = client.screenshot()
+        box = banner_box(screenshot)
+        if box:
+            break
+        assert time.monotonic() < deadline, "Image paste fixture did not appear"
+        time.sleep(0.25)
     client.click(box[0] + 100, box[3] + 70)
     client.chord(0xFFE3, ord("v"))
     client.chord(0xFFE3, ord("s"))
@@ -365,6 +395,165 @@ else:
         assert time.monotonic() < deadline, "Chromium did not paste the complete image"
         time.sleep(0.1)
     client.screenshot().save(case / "05-chromium-image-pasted.png")
+
+
+def dolphin_image_check(runtime, inner, config, case, client, host_probe, inner_probe):
+    # Close only our image-bearing apps; host Alt+F4 can close nested KWin.
+    stopped = run(
+        runtime,
+        "exec",
+        "--user=plasma",
+        inner,
+        "python3",
+        "-c",
+        """
+from pathlib import Path
+import os, signal, time
+targets = []
+for path in Path('/proc').glob('[0-9]*'):
+    try:
+        raw = (path / 'cmdline').read_bytes()
+        args = raw.split(bytes([0]))
+    except (FileNotFoundError, ProcessLookupError):
+        continue
+    program = args[0].split(b' ', 1)[0].rsplit(b'/', 1)[-1]
+    # Chromium may rewrite argv into one process-title string.
+    browser = program in (b'chromium', b'chromium-browser') and b'--user-data-dir=/run/plasma/clipboard-browser' in raw and b'--type=' not in raw
+    image_editor = program == b'plasma-ui-fixture' and b'/e2e-images/pasted.png' in raw
+    if browser or image_editor:
+        try:
+            os.kill(int(path.name), signal.SIGTERM)
+            targets.append(path)
+        except ProcessLookupError:
+            pass
+for attempt in range(50):
+    live = []
+    for path in targets:
+        try:
+            state = (path / 'stat').read_text().rsplit(')', 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if state != 'Z':
+            live.append(path)
+    if not live:
+        break
+    time.sleep(0.1)
+else:
+    raise SystemExit('Test image applications did not stop')
+""",
+    )
+    assert stopped.returncode == 0, stopped.stderr
+    destination = case / "images" / "dolphin"
+    destination.mkdir()
+    payload = {
+        "image/png": (case / "images" / "host-qt.png").read_bytes(),
+        "application/x-kde-suggestedfilename": b"Dolphin screenshot.png",
+    }
+    result = run(
+        runtime,
+        "exec",
+        "-d",
+        "--user=plasma",
+        inner,
+        "env",
+        *display_environment(config),
+        "dolphin",
+        "--new-window",
+        "/e2e-images/dolphin",
+    )
+    assert result.returncode == 0, result.stderr
+    time.sleep(2)
+    client.click(client.width // 2, client.height // 2)
+    # Copy after app startup/cleanup so a previous selection owner cannot race
+    # this paste; restored history can still include the retired ownership MIME.
+    host_probe.set(
+        {**payload, "application/x-plasma6-clipboard-owner": b"retired-owner"}
+    )
+    inner_probe.wait(payload)
+    client.chord(0xFFE3, ord("v"))
+    time.sleep(1)
+    client.screenshot().save(case / "06-dolphin-paste-dialog.png")
+    # Accept the suggested name and default format, just like a normal paste.
+    # Editing the extension can change KIO's selected format and hide this bug.
+    client.key(0xFF0D, True)
+    client.key(0xFF0D, False)
+    deadline = time.monotonic() + 10
+    while not any(
+        path.is_file() and not path.name.startswith(".")
+        for path in destination.iterdir()
+    ):
+        assert time.monotonic() < deadline, "Dolphin did not create the pasted file"
+        time.sleep(0.1)
+    output = next(
+        path
+        for path in destination.iterdir()
+        if path.is_file() and not path.name.startswith(".")
+    )
+    assert output.name == "Dolphin screenshot.png", output.name
+    assert output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), (
+        f"Dolphin saved {output.stat().st_size} bytes of non-PNG clipboard data"
+    )
+    with Image.open(output) as image:
+        image.verify()
+    actual = Image.open(output).convert("RGBA")
+    expected = expected_image(publisher=True)
+    assert actual.size == expected.size and actual.tobytes() == expected.tobytes(), (
+        "Dolphin changed the image pixels or alpha"
+    )
+    client.screenshot().save(case / "07-dolphin-pasted-file.png")
+    result = run(
+        runtime,
+        "exec",
+        "-d",
+        "--user=plasma",
+        inner,
+        "/bin/bash",
+        "-c",
+        'exec "$@" > /e2e-images/gwenview.log 2>&1',
+        "clipboard-gwenview",
+        "env",
+        *display_environment(config),
+        "gwenview",
+        "--fullscreen",
+        "/e2e-images/dolphin/Dolphin screenshot.png",
+    )
+    assert result.returncode == 0, result.stderr
+    colors = ((210, 100, 180), (20, 180, 90), (40, 90, 220))
+    deadline = time.monotonic() + 20
+    while True:
+        screenshot = client.screenshot()
+        samples = screenshot.resize((160, 100), Image.Resampling.NEAREST).getcolors(
+            16000
+        )
+        assert samples is not None
+        counts = [
+            sum(
+                count
+                for count, pixel in samples
+                if max(abs(a - b) for a, b in zip(pixel, color)) <= 10
+            )
+            for color in colors
+        ]
+        if min(counts) >= 300:
+            break
+        assert time.monotonic() < deadline, (
+            f"Gwenview did not display the pasted image: {counts}"
+        )
+        time.sleep(0.25)
+    screenshot.save(case / "08-gwenview-opened-image.png")
+    (case / "dolphin-image.json").write_text(
+        json.dumps(
+            {
+                "filename": output.name,
+                "bytes": output.stat().st_size,
+                "dimensions": list(actual.size),
+                "pixels_and_alpha_equal": True,
+                "gwenview_color_samples": counts,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
 
 def launch_checked(case, label, *arguments, **settings):
@@ -595,6 +784,8 @@ def main():
                         "testpass",
                         "-forever",
                         "-shared",
+                        # This server captures input/frames, not clipboard data.
+                        "-nosel",
                         "-noxdamage",
                     ]
                     result = run(runtime, "exec", inner, *command)
@@ -639,7 +830,8 @@ def main():
                     time.sleep(0.1)
                 client.screenshot().save(case / "02-pasted-and-saved.png")
                 report["checks"]["gui-paste-and-host-file-save"] = True
-                expected = f"Container GUI copy to host: {label} AaZz 0123!?"
+                # Mixed-case keyboard input is covered by ui.py; this checks copying.
+                expected = f"container gui copy to host {label} az09 0123"
                 client.chord(0xFFE3, ord("a"))
                 client.text(expected)
                 host_probe.drain()
@@ -666,36 +858,22 @@ def main():
                     runtime, inner, config, case, client, host_probe, inner_probe
                 )
                 report["checks"]["chromium-image-paste-and-host-file-save"] = True
-                controller = run(
-                    runtime,
-                    "exec",
-                    inner,
-                    "systemctl",
-                    "show",
-                    "-p",
-                    "MainPID",
-                    "--value",
-                    "plasma-clipboard.service",
+                dolphin_image_check(
+                    runtime, inner, config, case, client, host_probe, inner_probe
                 )
-                pid = int(controller.stdout.strip())
-                query = f"from pathlib import Path; p=Path('/proc/{pid}/task/{pid}/children'); child=p.read_text().split()[0]; print(Path('/proc/'+child+'/cmdline').read_bytes().split(bytes([0]))[-2].decode())"
-                identity = run(
-                    runtime, "exec", inner, "python3", "-c", query
-                ).stdout.strip()
-                assert len(identity) == 36, identity
-                history = Probe(
-                    runtime,
-                    outer,
-                    host_config,
-                    case / "history-probe.log",
-                    identity=identity,
-                )
-                probes.append(history)
+                report["checks"]["dolphin-png-file-and-filename"] = True
+                report["checks"]["gwenview-opens-pasted-image"] = True
                 restored = {
-                    "text/plain": f"Restored clipboard history: {label}".encode()
+                    "text/plain": f"Restored clipboard history: {label}".encode(),
+                    "application/x-plasma6-clipboard-owner": b"retired-owner",
+                    "application/x-kde-onlyReplaceEmpty": b"1",
                 }
-                history.set(restored)
-                inner_probe.wait(restored)
+                host_probe.set(restored)
+                inner_probe.wait({"text/plain": restored["text/plain"]})
+                assert (
+                    "application/x-plasma6-clipboard-owner"
+                    not in inner_probe.latest[0]["data"]
+                )
                 report["checks"]["clipboard-history-restore"] = True
                 time.sleep(0.5)
                 assert host_probe.drain() < 10 and inner_probe.drain() < 10, (

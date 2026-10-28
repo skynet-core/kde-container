@@ -17,7 +17,6 @@
 #include <QString>
 #include <QStringList>
 #include <QTimer>
-#include <QUuid>
 #include <QtTypes>
 #include <algorithm>
 #include <array>
@@ -45,18 +44,19 @@ namespace {
 using Data = std::map<QString, QByteArray>;
 constexpr qsizetype maxBytes = 64LL * 1024 * 1024;
 constexpr qsizetype maxWireBytes = maxBytes * 2;
-constexpr char marker[] = "application/x-plasma6-clipboard-owner";
 bool sessionLocal(const QString &type) {
   return type == "application/vnd.portal.filetransfer" ||
          type == "application/x-kde-source-id" ||
-         type == "application/x-kde-onlyReplaceEmpty";
+         type == "application/x-kde-onlyReplaceEmpty" ||
+         // Old clipboard history may retain the bridge's former UUID marker.
+         type == "application/x-plasma6-clipboard-owner";
 }
 
 QStringList transferFormats(const QStringList &formats) {
   QStringList result;
   const bool png = formats.contains("image/png");
   for (const auto &type : formats) {
-    if (type == marker || sessionLocal(type))
+    if (sessionLocal(type))
       continue;
     // Qt expands one QImage into every installed image encoder. Fetching them
     // all can stall on codecs or exceed the selection limit for a screenshot.
@@ -152,14 +152,12 @@ void consume(QByteArray &buffer, const QByteArray &input,
 
 class Endpoint {
 public:
-  explicit Endpoint(QByteArray identity) : identity(std::move(identity)) {}
   virtual ~Endpoint() = default;
   virtual void set(int mode, Data data) = 0;
 
   void publish(int mode, Data data) {
     const bool first = initial.at(mode);
     initial.at(mode) = false;
-    data.erase(marker);
     normalize(data);
     QJsonObject formats;
     qsizetype size = 0;
@@ -199,21 +197,17 @@ public:
       data.emplace(it.key(), decoded.decoded);
     }
     normalize(data);
-    if (!data.empty())
-      data[marker] = identity;
     initial.at(mode) = false;
     set(mode, std::move(data));
   }
 
 protected:
-  QByteArray identity;
   std::array<bool, 2> initial{true, true};
 };
 
 class X11Endpoint : public Endpoint {
 public:
-  explicit X11Endpoint(const QByteArray &identity)
-      : Endpoint(identity), clipboard(QGuiApplication::clipboard()) {
+  X11Endpoint() : clipboard(QGuiApplication::clipboard()) {
     QObject::connect(clipboard, &QClipboard::changed, clipboard,
                      [this](QClipboard::Mode mode) { changed(mode); });
     QTimer::singleShot(0, clipboard, [this] {
@@ -416,7 +410,7 @@ public:
     if (display)
       wl_display_disconnect(display);
   }
-  explicit WaylandEndpoint(const QByteArray &identity) : Endpoint(identity) {
+  WaylandEndpoint() {
     const auto name = qgetenv("WAYLAND_DISPLAY");
     display = wl_display_connect(name.constData());
     if (!display)
@@ -486,13 +480,12 @@ public:
   }
 };
 
-int endpoint(QCoreApplication &app, const QString &backend,
-             const QByteArray &identity) {
+int endpoint(QCoreApplication &app, const QString &backend) {
   std::unique_ptr<Endpoint> clipboard;
   if (backend == "wayland")
-    clipboard = std::make_unique<WaylandEndpoint>(identity);
+    clipboard = std::make_unique<WaylandEndpoint>();
   else
-    clipboard = std::make_unique<X11Endpoint>(identity);
+    clipboard = std::make_unique<X11Endpoint>();
   if (fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK) < 0)
     fail("cannot monitor clipboard controller");
   QSocketNotifier input(STDIN_FILENO, QSocketNotifier::Read);
@@ -512,7 +505,6 @@ int endpoint(QCoreApplication &app, const QString &backend,
 }
 
 int bridge(QCoreApplication &app) {
-  const auto identity = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
   std::array<QProcess, 2> processes;
   std::array<QByteArray, 2> buffers;
   std::array<QByteArray, 2> previous;
@@ -532,9 +524,8 @@ int bridge(QCoreApplication &app) {
     }
     processes.at(side).setProcessEnvironment(environment);
     processes.at(side).setProcessChannelMode(QProcess::ForwardedErrorChannel);
-    processes.at(side).start(
-        QCoreApplication::applicationFilePath(),
-        {"--endpoint", backend, QString::fromLatin1(identity)});
+    processes.at(side).start(QCoreApplication::applicationFilePath(),
+                             {"--endpoint", backend});
   };
   for (int side = 0; side < 2; ++side) {
     auto &process = processes.at(side);
@@ -600,7 +591,7 @@ int bridge(QCoreApplication &app) {
 
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
-  const bool worker = argc == 4 && std::strcmp(argv[1], "--endpoint") == 0;
+  const bool worker = argc == 3 && std::strcmp(argv[1], "--endpoint") == 0;
   const bool x11 = worker && std::strcmp(argv[2], "x11") == 0;
   std::unique_ptr<QCoreApplication> app;
   if (x11)
@@ -608,7 +599,7 @@ int main(int argc, char **argv) {
   else
     app = std::make_unique<QCoreApplication>(argc, argv);
   if (worker)
-    return endpoint(*app, QString::fromLocal8Bit(argv[2]), argv[3]);
+    return endpoint(*app, QString::fromLocal8Bit(argv[2]));
   if (argc != 1)
     return 2;
   return bridge(*app);

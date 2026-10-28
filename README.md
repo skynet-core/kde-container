@@ -74,7 +74,8 @@ Ubuntu's native `chromium-browser` package is a Snap launcher. For the `ui-test`
 target, its Dockerfile fetches Chromium, its common files, sandbox helper and JPEG
 ABI package from Debian's signed APT archive in a separate stage. Remaining
 dependencies come from Ubuntu; no Debian repository is added to the Ubuntu image.
-The production build skips this browser stage. Arch uses native desktop
+The `ui-test` image also includes native Gwenview for Dolphin image-paste
+regressions. The production build skips these test tools. Arch uses native desktop
 packages and a dedicated Python environment for checksum-pinned websockify.
 Debian's older KWin streams its existing virtual monitor through PipeWire;
 newer releases create the additional `Virtual-Plasma` monitor. Both support GPU
@@ -86,7 +87,9 @@ rendering and automatic software fallback.
 variants for `linux/amd64` on pushes to `main`, `v*` tags, pull requests and manual
 runs. It checks init and systemd units, boots the supported headless/VNC/web modes,
 then tests window dragging, text saved through a host mount, and Chromium kiosk
-input/restart. Hosted runners have no desktop socket, so nested tests remain local.
+input/restart. It also checks nested clipboard sharing and screenshot files pasted
+through Dolphin and opened in Gwenview. The clipboard suite creates its parent
+desktop in another disposable container, so hosted runners need no host GUI socket.
 Per-case journals, screenshots and output files are retained as workflow artifacts.
 
 Successful pushes and manual runs with `publish=true` push the **tested production
@@ -1618,7 +1621,9 @@ service is needed. Set `-e CLIPBOARD_SYNC=0` to disable it.
 
 Screenshots from Spectacle use a single lossless PNG transfer, preserving
 transparency without requesting every image encoder advertised by Qt. Image
-pasting works in image-capable applications such as Chromium.
+pasting works in image-capable applications such as Chromium. Pasting into Dolphin
+creates a valid PNG file with the suggested filename, suitable for Gwenview.
+Private bridge metadata is excluded from clipboard content.
 
 The bridge uses Wayland data-control or X11 selections through the supplied
 sockets. File URI selections require shared paths; file contents are not copied

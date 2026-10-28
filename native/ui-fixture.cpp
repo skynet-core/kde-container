@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMimeData>
 #include <QObject>
 #include <QPainter>
 #include <QPixmap>
@@ -74,7 +75,13 @@ int main(int argc, char **argv) {
       QObject::connect(shortcut, &QShortcut::activated, &window, callback);
     };
     action("Copy 4K Qt image (Ctrl+C)", QKeySequence::Copy, [&] {
-      app.clipboard()->setImage(image);
+      auto mime = new QMimeData;
+      mime->setImageData(image);
+      mime->setData("application/x-kde-suggestedfilename",
+                    "Dolphin screenshot.png");
+      // Clipboard-manager restores can include the former bridge marker.
+      mime->setData("application/x-plasma6-clipboard-owner", "retired-owner");
+      app.clipboard()->setMimeData(mime);
       // Keep the owner alive after the test clicks Copy and returns to KWin.
       if (publishImage)
         window.hide();

@@ -55,9 +55,10 @@ the bridge needs no host D-Bus mount or host-side daemon.
 The service starts one controller and two endpoints. Each endpoint owns a
 connection to its display; the controller passes MIME payloads between them over
 private process pipes. The host selection wins on startup, so a newly created
-desktop does not replace it with an empty initial clipboard. Each forwarded
-offer includes a bridge identifier. The controller deduplicates equal MIME
-payloads, so clipboard-manager history restores propagate normally while repeated
+desktop does not replace it with an empty initial clipboard. Endpoints detect
+their own selections through the display connection; the bridge adds no private
+ownership MIME format. The controller deduplicates equal MIME payloads, so
+clipboard-manager history restores propagate normally while repeated
 copies of the current selection do not create a feedback loop.
 
 The helper serves the copied bytes while it owns a selection. It handles partial
@@ -126,6 +127,20 @@ Host compositor policy can restrict data-control access. If neither data-control
 nor an authenticated X11 connection is available, the service reports the missing
 capability. Use `CLIPBOARD_SYNC=0` for a desktop without clipboard sharing.
 
+## Pasting screenshots into Dolphin
+
+Dolphin uses KDE's [KIO paste implementation](https://github.com/KDE/kio/blob/master/src/widgets/paste.cpp)
+to choose clipboard data and save it to a file. The bridge preserves the PNG bytes
+and `application/x-kde-suggestedfilename`, so accepting the default paste dialog
+creates a real PNG with the suggested filename. Gwenview can then decode it.
+
+The bridge does not advertise an internal ownership UUID as a file format. Older
+versions did, which could make Dolphin save 36 bytes of UUID text under the PNG
+filename. That obsolete MIME type is also filtered from clipboard history restored
+by a host clipboard manager. Clipboard loop prevention uses display ownership and
+content deduplication instead. Already affected files contain no image pixels;
+copy the original screenshot and paste it again using an updated container.
+
 ## File manager copy and paste
 
 A file URI is a path reference, not the file's contents. For example,
@@ -176,12 +191,17 @@ host-mounted file, and copy new editor text back to the parent clipboard. They
 also paste the 4K image into a Qt application and Chromium using real keyboard
 events. The pasted images are saved to the host mount and their pixels compared
 with the source. The local [Chromium test page](../test/clipboard-browser.py) saves
-only images received through a browser paste event. Chromium remains exclusive
-to the `ui-test` images. Before and after screenshots, saved text and images, and
+only images received through a browser paste event. Dolphin also pastes the
+screenshot into a host-mounted directory using the default format and filename.
+The test verifies the PNG signature, integrity, full pixels and alpha, then opens
+it in Gwenview and checks its displayed colors from an RFB screenshot. Chromium
+and the test image viewer remain exclusive to the `ui-test` images. Before and after screenshots, saved text and images, and
 service journals remain in the printed artifact directory after container cleanup.
 X11-on-Wayland UI checks use the private X11 capture; the other cases capture the
 nested window in its parent display. The test keeps the parent's VNC connection
-open so KRFB retains its virtual monitor even during private X11 capture.
+open so KRFB retains its virtual monitor even during private X11 capture. The
+private capture server uses `x11vnc -nosel` so its clipboard exchange cannot
+interfere with the bridge under test.
 
 Applications started with `docker exec` or `podman exec` receive the complete
 `/etc/plasma/session.env` in these tests. An exec command normally gets the image's
@@ -208,3 +228,8 @@ different parent image when testing interoperability across distribution version
 
 The Arch CI software-rendering check uses a Wayland parent. Testing its X11
 transport requires a parent X11/Xwayland server with usable OpenGL support.
+
+If a virtual parent produces stale or incomplete GPU-capture frames, use
+`--host-image` with another built UI-test image, or use `--no-gpu` to check the
+software-rendering path. This changes the test setup; normal nested sessions
+continue to use their real host compositor and the image's renderer selection.

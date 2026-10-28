@@ -14,8 +14,8 @@ debian | ubuntu)
 	export DEBIAN_FRONTEND=noninteractive
 	if [[ $ID == ubuntu && $phase == browser ]]; then
 		# Only the browser and its JPEG ABI compatibility package come from
-		# Debian's signed archive. Other dependencies are resolved from Ubuntu.
-		packages=(/tmp/chromium-debs/*.deb)
+		# Debian's signed archive. Native test tools stay in the package list.
+		packages+=(/tmp/chromium-debs/*.deb)
 	fi
 	apt-get update
 	apt-get install -y --no-install-recommends "${packages[@]}"
