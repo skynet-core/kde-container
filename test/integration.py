@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -255,12 +256,38 @@ def main():
                     assert len(compositors) == 1, (
                         f"Expected one compositor, found: {compositors}"
                     )
+                nested_relay = False
+                if mode == "nested":
+                    session = command(
+                        runtime, "exec", name, "cat", "/etc/plasma/session.env"
+                    )
+                    assert session.returncode == 0, session.stderr
+                    config = dict(
+                        shlex.split(line)[0].split("=", 1)
+                        for line in session.stdout.splitlines()
+                    )
+                    nested_relay = any(
+                        config.get(flag) == "1"
+                        for flag in ("PLASMA_SOFTWARE_NESTED", "PLASMA_NVIDIA_NESTED")
+                    )
+                    ports = command(
+                        runtime,
+                        "inspect",
+                        "--format",
+                        "{{json .NetworkSettings.Ports}}",
+                        name,
+                    )
+                    assert ports.returncode == 0, ports.stderr
+                    published = json.loads(ports.stdout) or {}
+                    assert not any(
+                        published.get(f"{port}/tcp") for port in (5900, 6080)
+                    ), published
                 for service in ("plasma-vnc.service", "plasma-web.service"):
                     active = command(
                         runtime, "exec", name, "systemctl", "is-active", service
                     ).stdout.strip()
                     expected = (
-                        mode in ("vnc", "web")
+                        (mode in ("vnc", "web") or nested_relay)
                         if service == "plasma-vnc.service"
                         else mode == "web"
                     )

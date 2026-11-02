@@ -164,6 +164,7 @@ written into `session.env`. `/etc/sudoers` includes the managed root-owned
 | `WAYLAND_DISPLAY` | `wayland-0` for the private Wayland service environment |
 | `PLASMA_X11_DISPLAY` | Private X11 display, normally `:100` |
 | `PLASMA_SOFTWARE_CAPTURE` | `1` selects private Xvfb capture for older KWin's Wayland software mode; Arch retains OpenGL/PipeWire with `0` |
+| `PLASMA_SOFTWARE_NESTED` | Selects authenticated loopback presentation without changing the renderer; with software capture, the viewer and Xvfb use separate private displays |
 | `PLASMA_NVIDIA_SYNC` | Computed as `1` for GPU-backed nested Wayland sessions with usable NVIDIA hardware; enables KWin-only fence completion |
 | `PLASMA_SOFTWARE_DISPLAY` | Private Xvfb parent display for that fallback, normally `:110` |
 | `QT_QUICK_BACKEND` | Set to `software` during software fallback |

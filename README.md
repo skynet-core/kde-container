@@ -168,8 +168,10 @@ for package phases, caching and the publication flow.
 | `x11` | `vnc` | `plasma-x11-vnc.target` | Xvfb, KWin X11 and x11vnc |
 | `x11` | `web` | `plasma-x11-web.target` | X11 VNC services plus noVNC/websockify |
 
-With `TARGET_APP` unset, all modes start a full Plasma session and private session bus. Headless and nested
-modes start no remote listener. Set `DISPLAY_BACKEND=x11` in any command below for
+With `TARGET_APP` unset, all modes start a full Plasma session and private session bus.
+Nested presentation can use an authenticated loopback relay inside the container;
+its port is not published. Headless mode starts no remote listener.
+Set `DISPLAY_BACKEND=x11` in any command below for
 its full desktop X11 variant on Debian or Ubuntu. Fedora and Arch support the
 four Wayland desktop rows and both kiosk backends.
 The per-distribution examples spell out each supported backend.
@@ -210,7 +212,8 @@ chmod 600 ./vnc-password
 
 Connect a VNC viewer to `127.0.0.1:5900`, or open
 `http://127.0.0.1:6080/vnc.html` for web/kiosk mode and enter this password.
-Headless and nested modes need no password and start no remote listener.
+Headless and nested modes need no caller-supplied password. A nested relay generates
+its own private authentication files and listens only inside the container.
 
 ### Host socket for nested mode
 
@@ -1571,7 +1574,8 @@ mode on both Wayland and X11 hosts. This supports older Wayland parents missing
 protocols required by KWin 6.8 and X11 parents without usable DRI3. The compositor
 keeps its selected GPU or software renderer; the relay changes presentation and
 adds local capture/encoding work. Its VNC listener stays on container loopback
-and is not published. Older QPainter compositors keep their native nested path.
+and is not published. Software QPainter sessions on a Wayland host use a private
+Xvfb backing and a separate viewer display; other older nested paths remain direct.
 
 The internal `PLASMA_SOFTWARE_NESTED` flag identifies this presentation relay;
 its name does not indicate the renderer. Check `LIBGL_ALWAYS_SOFTWARE`, the

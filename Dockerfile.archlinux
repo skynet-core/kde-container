@@ -164,7 +164,12 @@ FROM runtime AS ui-test
 COPY build/install-packages /build-support/install-packages
 COPY build/packages/arch/browser.txt /build-support/packages/browser.txt
 # DISTRO_BROWSER_ARTIFACTS
+# Fedora defaults to user namespaces; preserve SUID fallback on restricted hosts.
 RUN bash /build-support/install-packages browser \
+    && if [ -f /etc/fedora-release ]; then \
+        chown 0:0 /usr/lib64/chromium-browser/chrome-sandbox \
+        && chmod 4755 /usr/lib64/chromium-browser/chrome-sandbox; \
+    fi \
     && rm -rf /build-support
 COPY --from=input-build /build/plasma-ui-fixture /usr/local/bin/plasma-ui-fixture
 COPY --from=input-build /build/plasma-vnc-benchmark /usr/local/bin/plasma-vnc-benchmark

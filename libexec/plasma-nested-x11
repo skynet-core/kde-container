@@ -23,9 +23,14 @@ fi
 viewer_options=()
 if [[ $HOST_DISPLAY_BACKEND == wayland ]]; then
 	export WAYLAND_DISPLAY=$HOST_WAYLAND_DISPLAY
-	/usr/bin/Xwayland "$PLASMA_SOFTWARE_DISPLAY" -auth /etc/plasma/Xauthority \
+	presenter_display=$PLASMA_SOFTWARE_DISPLAY
+	if [[ ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
+		# Keep the visible frontend separate from QPainter's Xvfb backing.
+		presenter_display=$PLASMA_X11_DISPLAY
+	fi
+	/usr/bin/Xwayland "$presenter_display" -auth /etc/plasma/Xauthority \
 		-nolisten tcp -noreset -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -shm &
-	export DISPLAY=$PLASMA_SOFTWARE_DISPLAY XAUTHORITY=/etc/plasma/Xauthority
+	export DISPLAY=$presenter_display XAUTHORITY=/etc/plasma/Xauthority
 	/usr/local/libexec/plasma-wait x11
 	viewer_options+=(-FullScreen=1)
 else

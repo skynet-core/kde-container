@@ -204,6 +204,10 @@ PYTHON
 	if [[ $backend == wayland && $mode == nested && $opengl_software == 1 ]]; then
 		software_nested=1
 	fi
+	if [[ $backend == wayland && $mode == nested && $software == 1 && $host_backend == wayland && $opengl_software == 0 ]]; then
+		software_capture=1
+		software_nested=1
+	fi
 	if [[ $backend == x11 && $mode == nested && -n $nvidia_bus ]]; then
 		nvidia_nested=1
 	fi

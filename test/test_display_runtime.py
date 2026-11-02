@@ -35,6 +35,31 @@ GPU = importlib.util.module_from_spec(GPU_SPEC)
 GPU_LOADER.exec_module(GPU)
 
 
+def shell_calls(source, environment, executables):
+    """Run the real shell flow with recorders only at executable boundaries."""
+    with tempfile.TemporaryDirectory() as directory:
+        for executable in executables:
+            stub = Path(directory) / Path(executable).name
+            stub.write_text(
+                "#!/usr/bin/python3\nimport json, os, sys\n"
+                'if sys.argv[1:] == ["--help"]: print("ShortcutModifiers"); sys.exit()\n'
+                'print(json.dumps({"program": os.path.basename(sys.argv[0]), '
+                '"argv": sys.argv[1:], "environment": {key: os.environ.get(key) '
+                'for key in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", '
+                '"LIBGL_ALWAYS_SOFTWARE", "XDG_SESSION_TYPE")}}), flush=True)\n'
+            )
+            stub.chmod(0o755)
+            source = source.replace(executable, str(stub))
+        result = subprocess.run(
+            ["/bin/bash", "-c", source, "plasma-test"],
+            env={**os.environ, **environment},
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return [json.loads(line) for line in result.stdout.splitlines()]
+
+
 class RenderingPolicyTests(unittest.TestCase):
     def test_window_policy_is_generic_and_applies_only_to_normal_windows(self):
         for mode in (None, "fullscreen", "maximized"):
@@ -160,7 +185,7 @@ class RenderingPolicyTests(unittest.TestCase):
                     self.assertIn(expected, result.stdout.splitlines())
                     self.assertNotIn(absent, result.stdout.splitlines())
 
-    def test_nested_presentation_relay_preserves_renderer_and_older_compositor_paths(
+    def test_nested_presentation_selects_legacy_capture_without_changing_renderer(
         self,
     ):
         module = (SOURCE.parents[1] / "init.d/modules/400-plasma.sh").read_text()
@@ -168,19 +193,19 @@ class RenderingPolicyTests(unittest.TestCase):
             "\tif [[ $backend == wayland", module.index("software_capture=1")
         )
         end = module.index("\tif [[ $backend == x11 && $mode == nested", start)
-        for backend, software, mode, host, opengl, expected in (
-            ("wayland", "1", "nested", "wayland", "1", "1"),
-            ("wayland", "1", "nested", "x11", "1", "1"),
-            ("wayland", "0", "nested", "wayland", "1", "1"),
-            ("wayland", "0", "nested", "x11", "1", "1"),
-            ("wayland", "0", "nested", "wayland", "0", "0"),
-            ("wayland", "0", "nested", "x11", "0", "0"),
-            ("wayland", "1", "nested", "wayland", "0", "0"),
-            ("wayland", "1", "nested", "x11", "0", "0"),
-            ("wayland", "1", "headless", "none", "1", "0"),
-            ("wayland", "1", "vnc", "none", "1", "0"),
-            ("wayland", "1", "web", "none", "1", "0"),
-            ("x11", "1", "nested", "wayland", "1", "0"),
+        for backend, software, mode, host, opengl, expected, capture in (
+            ("wayland", "1", "nested", "wayland", "1", "1", "0"),
+            ("wayland", "1", "nested", "x11", "1", "1", "0"),
+            ("wayland", "0", "nested", "wayland", "1", "1", "0"),
+            ("wayland", "0", "nested", "x11", "1", "1", "0"),
+            ("wayland", "0", "nested", "wayland", "0", "0", "0"),
+            ("wayland", "0", "nested", "x11", "0", "0", "0"),
+            ("wayland", "1", "nested", "wayland", "0", "1", "1"),
+            ("wayland", "1", "nested", "x11", "0", "0", "0"),
+            ("wayland", "1", "headless", "none", "1", "0", "0"),
+            ("wayland", "1", "vnc", "none", "1", "0", "0"),
+            ("wayland", "1", "web", "none", "1", "0", "0"),
+            ("x11", "1", "nested", "wayland", "1", "0", "0"),
         ):
             with self.subTest(
                 backend=backend, software=software, mode=mode, host=host, opengl=opengl
@@ -189,9 +214,9 @@ class RenderingPolicyTests(unittest.TestCase):
                     [
                         "/bin/bash",
                         "-c",
-                        "set -euo pipefail\nsoftware_nested=0\n"
+                        "set -euo pipefail\nsoftware_nested=0\nsoftware_capture=0\n"
                         + module[start:end]
-                        + '\nprintf "%s\n" "$software_nested" "$software" "$render_node"',
+                        + '\nprintf "%s\n" "$software_nested" "$software_capture" "$software" "$render_node"',
                     ],
                     env={
                         **os.environ,
@@ -210,10 +235,166 @@ class RenderingPolicyTests(unittest.TestCase):
                     result.stdout.splitlines(),
                     [
                         expected,
+                        capture,
                         software,
                         "/dev/dri/renderD128" if software == "0" else "",
                     ],
                 )
+
+    def test_legacy_backing_and_frontend_use_separate_authenticated_displays(self):
+        helper = SOURCE.parent / "plasma-nested-x11"
+        environment = {
+            "HOST_DISPLAY_BACKEND": "wayland",
+            "HOST_WAYLAND_DISPLAY": "/private-host/wayland",
+            "PLASMA_X11_DISPLAY": ":100",
+            "PLASMA_SOFTWARE_DISPLAY": ":110",
+            "DISPLAY_WIDTH": "800",
+            "DISPLAY_HEIGHT": "600",
+        }
+        for capture, software, frontend in (
+            ("1", "1", ":100"),
+            ("0", "1", ":110"),
+            ("0", "0", ":110"),
+        ):
+            with self.subTest(capture=capture, software=software):
+                records = shell_calls(
+                    helper.read_text(),
+                    {
+                        **environment,
+                        "PLASMA_SOFTWARE_CAPTURE": capture,
+                        "LIBGL_ALWAYS_SOFTWARE": software,
+                    },
+                    (
+                        "/usr/bin/Xwayland",
+                        "/usr/local/libexec/plasma-wait",
+                        "/usr/bin/vncviewer",
+                        "dbus-run-session",
+                    ),
+                )
+                calls = {row["program"]: row for row in records}
+                self.assertEqual(calls["Xwayland"]["argv"][0], frontend)
+                self.assertEqual(
+                    calls["Xwayland"]["argv"][1:3], ["-auth", "/etc/plasma/Xauthority"]
+                )
+                for name in ("plasma-wait", "dbus-run-session"):
+                    self.assertEqual(calls[name]["environment"]["DISPLAY"], frontend)
+                    self.assertEqual(
+                        calls[name]["environment"]["XAUTHORITY"],
+                        "/etc/plasma/Xauthority",
+                    )
+                    self.assertEqual(
+                        calls[name]["environment"]["LIBGL_ALWAYS_SOFTWARE"], software
+                    )
+                viewer = calls["dbus-run-session"]["argv"]
+                for argument in (
+                    "-PasswordFile=/etc/plasma/vnc-auth",
+                    "-FullColor=1",
+                    "-NoJPEG=1",
+                    "-AcceptClipboard=0",
+                    "-SendClipboard=0",
+                    "127.0.0.1::5900",
+                ):
+                    self.assertIn(argument, viewer)
+        backing = shell_calls(
+            (SOURCE.parent / "plasma-software-display").read_text(),
+            environment,
+            ("/usr/bin/Xvfb",),
+        )[0]
+        self.assertEqual(
+            backing["argv"][0:3], [":110", "-auth", "/etc/plasma/Xauthority"]
+        )
+        adapter = (SOURCE.parent / "plasma-backend/kwin_wayland").read_text()
+        records = shell_calls(
+            adapter,
+            {
+                **environment,
+                "DISPLAY_MODE": "nested",
+                "PLASMA_SOFTWARE_NESTED": "1",
+                "PLASMA_SOFTWARE_CAPTURE": "1",
+                "PLASMA_NVIDIA_SYNC": "0",
+                "PLASMA_KWIN_BINARY": "",
+            },
+            ("/usr/local/libexec/plasma-wait", "/usr/bin/kwin_wayland"),
+        )
+        calls = {row["program"]: row for row in records}
+        self.assertEqual(calls["plasma-wait"]["environment"]["DISPLAY"], ":110")
+        self.assertEqual(
+            calls["plasma-wait"]["environment"]["XAUTHORITY"], "/etc/plasma/Xauthority"
+        )
+        args = calls["kwin_wayland"]["argv"]
+        self.assertEqual(args[args.index("--x11-display") + 1], ":110")
+        self.assertNotIn("--virtual", args)
+        self.assertNotIn("--wayland-display", args)
+
+    def test_private_x11_capture_flags_do_not_change_public_or_nvidia_servers(self):
+        source = (SOURCE.parent / "plasma-vnc").read_text()
+        for software_relay, nvidia, capture, backend in (
+            ("1", "0", "1", "wayland"),
+            ("0", "0", "1", "wayland"),
+            ("0", "1", "0", "x11"),
+        ):
+            with self.subTest(software_relay=software_relay, nvidia=nvidia):
+                call = shell_calls(
+                    source,
+                    {
+                        "PLASMA_SOFTWARE_NESTED": software_relay,
+                        "PLASMA_NVIDIA_NESTED": nvidia,
+                        "PLASMA_SOFTWARE_CAPTURE": capture,
+                        "DISPLAY_BACKEND": backend,
+                        "DISPLAY": ":100",
+                        "PLASMA_SOFTWARE_DISPLAY": ":110",
+                        "XAUTHORITY": "/etc/plasma/Xauthority",
+                        "VNC_MAX_FPS": "60",
+                        "WAYLAND_DISPLAY": "wayland-0",
+                    },
+                    ("/usr/bin/x11vnc",),
+                )[0]
+                args = call["argv"]
+                self.assertEqual(
+                    "-localhost" in args, software_relay == "1" or nvidia == "1"
+                )
+                self.assertEqual("-no6" in args, software_relay == "1")
+                self.assertEqual("-rfbportv6" in args, software_relay == "1")
+                if software_relay == "1":
+                    self.assertEqual(args[args.index("-rfbportv6") + 1], "-1")
+                self.assertEqual(
+                    args[args.index("-rfbauth") + 1], "/etc/plasma/vnc-auth"
+                )
+                self.assertEqual(
+                    args[args.index("-display") + 1],
+                    ":110" if capture == "1" else ":100",
+                )
+                if capture == "1":
+                    self.assertIn("-nomodtweak", args)
+                    self.assertIn("-noxkb", args)
+                    self.assertIsNone(call["environment"]["WAYLAND_DISPLAY"])
+
+    def test_nested_target_orders_conditional_backing_before_session(self):
+        root = SOURCE.parents[1]
+
+        def unit(name):
+            config = configparser.ConfigParser(interpolation=None, strict=False)
+            config.read(root / "systemd/system" / name)
+            return config
+
+        target = unit("plasma-wayland-nested.target")
+        backing = unit("plasma-software-display.service")
+        session = unit("plasma-session.service")
+        self.assertIn(
+            "plasma-software-display.service", target["Unit"]["Requires"].split()
+        )
+        self.assertIn("plasma-session.service", backing["Unit"]["Before"].split())
+        self.assertIn(
+            "plasma-software-display.service", session["Unit"]["After"].split()
+        )
+        condition = backing["Service"]["ExecCondition"]
+        for capture, expected in (("0", 1), ("1", 0)):
+            result = subprocess.run(
+                ["/bin/bash", "-c", condition],
+                env={**os.environ, "PLASMA_SOFTWARE_CAPTURE": capture},
+                check=False,
+            )
+            self.assertEqual(result.returncode, expected)
 
     def test_debian_nvidia_remote_fallback_does_not_override_source_compositor(self):
         for overlay, backend, mode, distro, version, vendor, expected in (

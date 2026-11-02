@@ -12,6 +12,10 @@ on:
         type: boolean
         default: true
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -133,6 +137,13 @@ jobs:
           load: true
           tags: ${{ env.UI_IMAGE }}
           cache-from: type=gha,scope=plasma6-${{ matrix.distro }}
+
+      - name: Verify Chromium sandbox fallback with user namespaces denied
+        run: |
+          docker run --rm --privileged --userns=host --network=none --shm-size=256m \
+              --mount "type=bind,source=$GITHUB_WORKSPACE/test,target=/test,readonly" \
+              --entrypoint /usr/bin/python3 "$UI_IMAGE" /test/check-browser-sandbox.py \
+              2>&1 | tee test/.artifacts/browser-sandbox.log
 
       - name: Verify remote mouse, typing, screenshots and Chromium kiosk
         run: |
