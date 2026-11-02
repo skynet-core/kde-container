@@ -2,13 +2,60 @@
 """Exercise the host launcher with Docker or Podman and retain per-case evidence."""
 
 import argparse
+import json
 import os
 import subprocess
 import time
 from pathlib import Path
 
-from support import available_backends, collect_artifacts, renderer_command, wait_ready
+from support import (
+    available_backends,
+    collect_artifacts,
+    launch,
+    renderer_command,
+    software_options,
+    wait_ready,
+)
 from support import run as command
+
+
+def verify_unsupported_x11(runtime, image, artifacts):
+    case = artifacts / "x11-desktop-unavailable"
+    case.mkdir()
+    name = f"plasma6-test-{os.getpid()}-x11-unavailable"
+    report = {
+        "passed": False,
+        "expected_rejection": True,
+        "backend": "x11",
+        "mode": "headless",
+    }
+    try:
+        result = launch(
+            runtime,
+            image,
+            name,
+            "x11",
+            "headless",
+            *software_options(runtime),
+            TARGET_APP="",
+        )
+        (case / "run.log").write_text(result.stdout + result.stderr)
+        assert result.returncode == 0, result.stderr
+        stopped = command(runtime, "wait", name, timeout=30)
+        logs = command(runtime, "logs", name)
+        (case / "rejection.log").write_text(
+            stopped.stdout + stopped.stderr + logs.stdout + logs.stderr
+        )
+        assert stopped.returncode == 0 and int(stopped.stdout.strip()) != 0
+        assert "This image has no usable KWin X11 session" in logs.stdout + logs.stderr
+        report["image_id"] = command(
+            runtime, "inspect", "--format", "{{.Image}}", name
+        ).stdout.strip()
+        report["passed"] = True
+        print("PASS x11-desktop-unavailable (expected rejection)", flush=True)
+    finally:
+        (case / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+        collect_artifacts(runtime, name, case)
 
 
 def main():
@@ -36,11 +83,18 @@ def main():
         help="Override the launcher's namespace for mapping regression checks",
     )
     parser.add_argument("--gpus", help="Pass a Docker GPU request, for example all")
+    parser.add_argument("--no-gpu", action="store_true")
     parser.add_argument("--expect-renderer", choices=("gpu", "software"))
     options = parser.parse_args()
     runtime = options.runtime
     if options.gpus and Path(runtime).name != "docker":
         parser.error("--gpus requires Docker")
+    if options.no_gpu:
+        if options.gpus or options.expect_renderer == "gpu":
+            parser.error(
+                "--no-gpu conflicts with a GPU request or expected GPU renderer"
+            )
+        options.expect_renderer = "software"
     artifacts = (
         Path(__file__).resolve().parent
         / ".artifacts"
@@ -48,9 +102,19 @@ def main():
     )
     artifacts.mkdir(parents=True)
     failed = []
-    backends = options.backends
-    if backends is None:
-        backends = available_backends(runtime, options.image)
+    supported = available_backends(runtime, options.image)
+    if "x11" not in supported:
+        try:
+            verify_unsupported_x11(runtime, options.image, artifacts)
+        except (
+            RuntimeError,
+            AssertionError,
+            OSError,
+            subprocess.SubprocessError,
+        ) as error:
+            failed.append("x11-desktop-unavailable")
+            print(f"FAIL x11-desktop-unavailable: {error}", flush=True)
+    backends = options.backends or supported
     for backend in backends:
         for mode in options.modes:
             if mode == "nested" and options.skip_nested:
@@ -72,6 +136,8 @@ def main():
                 "HOST_DISPLAY_BACKEND": options.host_backend,
                 "VNC_PORT": "0",
                 "WEB_PORT": "0",
+                "TARGET_APP": "",
+                "TARGET_APP_WINDOW_MODE": "fullscreen",
             }
             environment.pop("VNC_PASSWORD_FILE", None)
             launcher = Path(__file__).resolve().parents[1] / "bin/plasma6-run"
@@ -81,6 +147,8 @@ def main():
                     run_options.append(f"--userns={options.userns}")
                 if options.gpus:
                     run_options += ["--gpus", options.gpus]
+                if options.no_gpu:
+                    run_options += software_options(runtime)
                 result = command(str(launcher), *run_options, env=environment)
                 (case / "run.log").write_text(result.stdout + result.stderr)
                 if result.returncode:

@@ -580,7 +580,7 @@ def main():
     )
     options = parser.parse_args()
     runtime = options.runtime
-    supported = available_backends(runtime, options.image)
+    supported = available_backends(runtime, options.image, kiosk=options.kiosk)
     backends = options.backends or supported
     host_image = options.host_image or options.image
     hosts = options.host_backends or ("wayland", "x11")
@@ -690,7 +690,8 @@ def main():
                         "HOST_XAUTHORITY=/run/host/Xauthority",
                     ]
                 private_capture = backend == "x11" and host == "wayland"
-                capture_options = ["-p", "127.0.0.1::5900"] if private_capture else []
+                # The presenter's private relay already uses loopback port 5900.
+                capture_options = ["-p", "127.0.0.1::5901"] if private_capture else []
                 # Explicit mounts point at this test's desktop, excluding the real host.
                 launch_checked(
                     case,
@@ -709,13 +710,33 @@ def main():
                     f"type=bind,source={case / 'images'},target=/e2e-images",
                     "--mount",
                     f"type=bind,source={Path(__file__).with_name('clipboard-browser.py')},target=/e2e-clipboard-browser.py,readonly",
-                    HOST_DISPLAY_BACKEND="wayland",
+                    HOST_DISPLAY_BACKEND=host,
                     WAYLAND_DISPLAY="/nonexistent-clipboard-test-socket",
                     TARGET_APP="plasma-ui-fixture /e2e-output/typed.txt"
                     if options.kiosk
                     else "",
                 )
                 config = configuration(runtime, inner)
+                if config.get("PLASMA_SOFTWARE_NESTED") == "1":
+                    listeners = run(
+                        runtime,
+                        "exec",
+                        inner,
+                        "python3",
+                        "-c",
+                        "import json; from pathlib import Path; "
+                        "rows=[line.split() for name in ('tcp','tcp6') for line in Path('/proc/net',name).read_text().splitlines()[1:]]; "
+                        "print(json.dumps([row[1].upper() for row in rows if row[3]=='0A' and row[1].split(':')[1].upper()=='170C']))",
+                    )
+                    (case / "software-relay-listeners.json").write_text(
+                        listeners.stdout
+                    )
+                    assert listeners.returncode == 0, listeners.stderr
+                    assert json.loads(listeners.stdout) == ["0100007F:170C"], (
+                        listeners.stdout
+                    )
+                    assert not run(runtime, "port", inner, "5900/tcp").stdout.strip()
+                    report["checks"]["software-relay-is-loopback-only"] = True
                 for name in (outer, inner):
                     run(runtime, "exec", name, "pkill", "-x", "plasma-welcome")
                 assert config["CLIPBOARD_SYNC"] == "1", config
@@ -779,7 +800,7 @@ def main():
                         "-auth",
                         config["XAUTHORITY"],
                         "-rfbport",
-                        "5900",
+                        "5901",
                         "-passwd",
                         "testpass",
                         "-forever",
@@ -796,7 +817,12 @@ def main():
                 )
                 if not private_capture:
                     client = parent_client
-                address = run(runtime, "port", capture, "5900/tcp").stdout.strip()
+                address = run(
+                    runtime,
+                    "port",
+                    capture,
+                    "5901/tcp" if private_capture else "5900/tcp",
+                ).stdout.strip()
                 deadline = time.monotonic() + 30
                 while client is None:
                     try:
@@ -892,6 +918,18 @@ def main():
                     for line in renderer.stdout.splitlines()
                     if line.startswith(("Compositing Type:", "OpenGL renderer string:"))
                 ]
+                if options.no_gpu:
+                    assert any(
+                        name in "\n".join(report["renderer"]).lower()
+                        for name in (
+                            "qpainter",
+                            "llvmpipe",
+                            "softpipe",
+                            "swrast",
+                            "swiftshader",
+                        )
+                    ), report["renderer"]
+                    report["checks"]["software-renderer"] = True
                 health = run(runtime, "exec", inner, "plasma-healthcheck")
                 assert health.returncode == 0, health.stdout + health.stderr
                 report["checks"]["healthy-after-clipboard-actions"] = True

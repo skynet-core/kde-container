@@ -37,3 +37,7 @@ tar
 gzip
 libglib2.0-bin
 qdbus-qt6
+libkf6service-bin
+libkscreen-bin
+libgles2
+xserver-xorg-core

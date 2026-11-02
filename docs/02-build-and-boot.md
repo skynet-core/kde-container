@@ -196,15 +196,21 @@ creates a `wayland-0` symlink to that private socket so service and client paths
 remain stable. The noVNC service resolves websockify through `PATH`, supporting
 both distribution executables and Arch's dedicated Python environment.
 
-Current Arch has removed the Plasma X11 session. It supports all four **Wayland**
-modes, including nesting a Wayland session on an X11 host. `auto` selects Wayland;
-explicit `DISPLAY_BACKEND=x11` fails at init. The other three distributions retain
-all eight profiles. Debian's older KWin fake-input v5 is supported through its
-actual keyboard keymap; newer KWin uses v6 keysym events directly.
+Current Arch no longer ships the Plasma X11 session, and Fedora's current
+`plasma-workspace` 6.8 package obsoletes its older X11 session package. Their full
+desktops support all four Wayland modes, including nesting on an X11 host.
+Explicit `DISPLAY_BACKEND=x11` without `TARGET_APP` fails at init. Debian and
+Ubuntu retain both full-desktop backends. Kiosk sessions use the separately
+namespaced KWin-X11 6.7.5 build on Fedora and Arch, so all four distributions
+support all eight kiosk profiles. Tests exercise that positive kiosk path and
+the expected full-desktop rejection where `startplasma-x11` is absent.
+Debian's older KWin fake-input v5 uses its actual keyboard keymap; newer KWin
+uses v6 keysym events directly.
 
 Debian's KWin 6.3 virtual backend cannot create the additional `Virtual-Plasma`
 output used by newer releases. Its image contains `/etc/plasma/vnc-existing-output`;
-init exports the corresponding internal flag, and a
+init exports the corresponding internal flag when the distro compositor is
+active, and a
 [small capture patch](../patches/krfb-existing-output.patch) streams the backend's
 existing monitor through PipeWire. This preserves GPU rendering and avoids an
 interactive portal dialog. Software capture still uses the private Xvfb path.
@@ -219,7 +225,8 @@ metadata cache with `kbuildsycoca6` and the standard `XDG_MENU_PREFIX=plasma-`.
 Older KWin uses that cache to discover KRFB's allowed Wayland interfaces. This
 bootstrap enables scoped capture/input permissions without starting Plasma shell.
 
-Arch's KWin 6.8 removed QPainter. Its capability marker
+Fedora and Arch's KWin 6.8, plus the optional private kiosk stack, removed QPainter.
+The active compositor's capability marker
 `/etc/plasma/opengl-software-capture` keeps software rendering on the virtual
 OpenGL/PipeWire path. Mesa performs the rendering on the CPU; the kernel's
 `/dev/udmabuf` exports its memory buffers. The host must provide that device and
@@ -529,7 +536,9 @@ export TARGET_APP='chromium "https://example.org/?label=hello world&view=kiosk"'
 Kiosk configuration is isolated with
 `XDG_CONFIG_HOME=/home/plasma/.config/plasma-kiosk`. Before starting KWin, the
 helper writes a rule forcing normal application windows fullscreen and without
-borders. Dialog windows retain their normal behavior. Chromium additionally gets
+borders. `TARGET_APP_WINDOW_MODE=maximized` selects borderless maximized geometry
+for applications whose nonclient input geometry requires it. Dialog windows retain
+their normal behavior. Chromium additionally gets
 `--kiosk`, first-run suppression flags and the matching `--ozone-platform`.
 The ordinary desktop's KWin configuration is unaffected.
 

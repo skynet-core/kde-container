@@ -5,6 +5,10 @@
 !build/create-user
 !build/normalize-runtime
 !build/collect-artifacts
+!build/tigervnc-viewer
+!build/arch-kwin-x11
+!build/kwin-*
+!build/kwin-phases/**
 !build/websockify-requirements.txt
 !build/packages/
 !build/packages/**
@@ -24,7 +28,11 @@
 !patches/**
 !compat/
 !compat/**
+!.clangd
+!.clang-tidy
 !test/
 !test/egl-fence-stub.cpp
 !test/egl-fence-test.cpp
+!test/native/
+!test/native/**
 **/__pycache__

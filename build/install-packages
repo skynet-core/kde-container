@@ -3,7 +3,7 @@
 set -euo pipefail
 # shellcheck disable=SC1091
 source /etc/os-release
-phase=${1:?desktop, browser, input-build, or vnc-build required}
+phase=${1:?package phase required}
 mapfile -t packages < <(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "/build-support/packages/$phase.txt")
 case $ID in
 fedora)

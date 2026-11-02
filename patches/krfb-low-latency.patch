@@ -1,15 +1,34 @@
 --- a/krfb/rfbservermanager.cpp
 +++ b/krfb/rfbservermanager.cpp
-@@ -209,5 +209,8 @@
+@@ -8,6 +8,7 @@
+     SPDX-License-Identifier: GPL-2.0-or-later
+ */
+ #include "rfbservermanager.h"
++#include "framebuffer-geometry.h"
+ #include "framebuffermanager.h"
+ #include "krfbconfig.h"
+ #include "krfbdebug.h"
+@@ -134,6 +135,7 @@
+ 
+ void RfbServerManager::updateFrameBuffer()
+ {
++    PlasmaFramebuffer::publish(QSize(d->fb->width(), d->fb->height()));
+     for (RfbServer *server : std::as_const(d->servers)) {
+         server->updateFrameBuffer(d->fb->data(), d->fb->width(), d->fb->height(), d->fb->depth());
+     }
+@@ -208,6 +210,10 @@
+         screen->frameBuffer = d->fb->data();
          screen->desktopName = d->desktopName.constData();
          screen->cursor = d->myCursor;
++        PlasmaFramebuffer::publish(QSize(screen->width, screen->height));
 +        // Qt already schedules and batches updates. LibVNCServer's additional
 +        // deferral otherwise costs another whole Qt timer tick per frame.
 +        screen->deferUpdateTime = 0;
      }
  
      return screen;
-@@ -219,6 +222,13 @@
+@@ -218,7 +224,14 @@
+     if (d->clients.size() == 0) {
          // qDebug() << "Starting framebuffer monitor";
          d->fb->startMonitor();
 -        d->rfbUpdateTimer.start(50ms);
@@ -26,12 +45,73 @@
  
 --- a/framebuffers/pipewire/pw_framebuffer.cpp
 +++ b/framebuffers/pipewire/pw_framebuffer.cpp
-@@ -113,5 +113,8 @@
+@@ -112,6 +112,12 @@
+     : q(q)
      , stream(new PipeWireSourceStream(q))
  {
 +    // Request damaged regions so a small UI change does not re-encode the
 +    // entire desktop. handleFrame() already consumes this metadata.
 +    stream->setDamageEnabled(true);
++    // VNC consumes CPU pixels; SHM avoids overflowing KPipeWire's fixed
++    // format buffer when GPU drivers advertise many DMA-BUF modifiers.
++    stream->setAllowDmaBuf(false);
      QObject::connect(stream.get(), &PipeWireSourceStream::frameReceived, q, [this](const PipeWireFrame &frame) {
          handleFrame(frame);
      });
+@@ -361,16 +367,23 @@
+ 
+ #if KPIPEWIRE60
+     if (frame.image) {
+-        memcpy(q->fb, frame.image->constBits(), frame.image->sizeInBytes());
+-        setVideoSize(frame.image->size());
+-    }
++        const QImage image = frame.image->convertToFormat(QImage::Format_RGBX8888);
+ #else
+     if (frame.dataFrame) {
+-        // FIXME: Assuming stride == width * 4, not sure to which extent this holds
+-        setVideoSize(frame.dataFrame->size);
+-        memcpy(q->fb, frame.dataFrame->data, frame.dataFrame->size.height() * frame.dataFrame->stride);
+-    }
++        const QImage image = frame.dataFrame->toImage().convertToFormat(QImage::Format_RGBX8888);
+ #endif
++        if (image.isNull()) {
++            return;
++        }
++        setVideoSize(image.size());
++        if (!q->fb) {
++            return;
++        }
++        const size_t rowBytes = static_cast<size_t>(image.width()) * BYTES_PER_PIXEL;
++        for (int row = 0; row < image.height(); ++row) {
++            memcpy(q->fb + row * rowBytes, image.constScanLine(row), rowBytes);
++        }
++    }
+     else if (frame.dmabuf) {
+         // FIXME: Assuming stride == width * 4, not sure to which extent this holds
+         const QSize size = {frame.dmabuf->width, frame.dmabuf->height};
+@@ -492,6 +505,12 @@
+     format.depth = 32;
+     format.trueColour = true;
+     format.bigEndian = false;
++    format.redMax = 255;
++    format.greenMax = 255;
++    format.blueMax = 255;
++    format.redShift = 0;
++    format.greenShift = 8;
++    format.blueShift = 16;
+ }
+ 
+ void PWFrameBuffer::startMonitor()
+--- a/krfb/rfbserver.cpp
++++ b/krfb/rfbserver.cpp
+@@ -174,7 +174,9 @@
+     if (d->screen) {
+         QList<QRect>::const_iterator it = modifiedTiles.constBegin();
+         for (; it != modifiedTiles.constEnd(); ++it) {
+-            rfbMarkRectAsModified(d->screen, it->x(), it->y(), it->right(), it->bottom());
++            // QRect edges are inclusive; LibVNCServer takes exclusive ends.
++            rfbMarkRectAsModified(d->screen, it->x(), it->y(),
++                                  it->x() + it->width(), it->y() + it->height());
+         }
+     }
+ }

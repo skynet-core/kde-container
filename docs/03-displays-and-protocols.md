@@ -54,6 +54,17 @@ individual X11 application windows through the Wayland compositor.
 | X11 | `vnc` | Xvfb plus x11vnc |
 | X11 | `web` | X11 VNC path plus websockify and noVNC |
 
+These X11 rows use Xvfb/Xephyr/Xwayland for software rendering. When a usable
+NVIDIA device is selected, a private Xorg virtual screen renders on that GPU
+without switching the host's virtual terminal. Nested hardware output is
+presented through an authenticated loopback viewer on the requested host
+transport. The launcher preserves explicit GPU/runtime/device settings and
+`LIBGL_ALWAYS_SOFTWARE=1` rather than replacing the caller's choice.
+
+Ordinary desktop capability also requires `startplasma-x11`; Fedora's current
+Plasma 6.8 and Arch packages no longer supply that session. Kiosks need only
+`kwin_x11`, provided by the separately namespaced 6.7.5 build on those images.
+
 **Headless** describes the absence of a physical or host-window display. It does
 not mean that there is no graphical session. The desktop can still render into an
 off-screen display and run applications.

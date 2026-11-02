@@ -115,6 +115,7 @@ service; the init module selects the values written into `session.env`.
 | `DISPLAY_MODE` | `headless` | One of `headless`, `nested`, `vnc`, `web` |
 | `DISPLAY_BACKEND` | `auto` | One of `auto`, `wayland`, `x11` |
 | `TARGET_APP` | Unset | Executable and quoted arguments; empty keeps the ordinary Plasma session |
+| `TARGET_APP_WINDOW_MODE` | `fullscreen` | `fullscreen` or borderless `maximized` for normal kiosk windows; dialog geometry stays unchanged |
 | `DISPLAY_WIDTH`, `DISPLAY_HEIGHT` | `1920`, `1080` | Initial dimensions; validated as 10–9999 |
 | `PLASMA_UID`, `PLASMA_GID` | Current image account IDs | Optional account adjustment; launcher supplies host IDs for Docker nested mode and every Podman mode |
 | `PLASMA_PASSWORD` | Unset | Configure the Linux account password at startup; unset preserves the existing password |
@@ -207,8 +208,8 @@ nested mode, so other modes with backend `auto` normally choose Wayland.
 | `/etc/systemd/system/default.target` | Symlink selecting the profile |
 | `/etc/systemd/system/plasma-*.target` | Packaged mode profiles |
 | `/etc/plasma/session.env` | Generated service environment; contains no VNC password value |
-| `/etc/plasma/vnc-existing-output` | Debian capability marker for capture of its existing virtual monitor |
-| `/etc/plasma/opengl-software-capture` | Arch capability marker for Mesa software OpenGL capture |
+| `/etc/plasma/vnc-existing-output` | Debian distro-compositor marker for capture of its existing virtual monitor |
+| `/etc/plasma/opengl-software-capture` | Software OpenGL capability marker; applied only to the active compositor |
 | `/etc/plasma/Xauthority` | Private X11 authorization cookie |
 | `/etc/plasma/host-Xauthority` | Normalized private copy of host credentials when supplied |
 | `/etc/plasma/vnc-password` | Private plaintext KRFB credential |
@@ -216,7 +217,7 @@ nested mode, so other modes with backend `auto` normally choose Wayland.
 | `/run/plasma/` | Desktop-owned private runtime directory |
 | `/run/plasma/bus` | Private desktop D-Bus socket |
 | `/run/plasma/wayland-0` | Normal private Wayland socket |
-| `/dev/udmabuf` | Host kernel device used by Arch's KWin for CPU-rendered DMA buffers |
+| `/dev/udmabuf` | Host kernel device used by KWin 6.8 for CPU-rendered DMA buffers |
 | `/run/host/wayland` | Optional bind-mounted host Wayland socket |
 | `/run/host/runtime/` | Alternative mount/search location for a host runtime directory |
 | `/run/host/X11/` | Optional read-only host X11 socket directory |

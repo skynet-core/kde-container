@@ -93,7 +93,7 @@ def main():
     options = parser.parse_args()
     runtime = options.runtime
     if options.backends is None:
-        options.backends = available_backends(runtime, options.image)
+        options.backends = available_backends(runtime, options.image, kiosk=True)
     root = Path(__file__).resolve().parents[1]
     artifacts = (
         root

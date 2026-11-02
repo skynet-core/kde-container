@@ -2,6 +2,11 @@ test/.artifacts/
 __pycache__/
 /build/*
 !/build/collect-artifacts
+!/build/arch-kwin-x11
+!/build/tigervnc-viewer
+!/build/kwin-*
+!/build/kwin-phases/
+!/build/KWIN.md
 !/build/create-user
 !/build/install-packages
 !/build/normalize-runtime

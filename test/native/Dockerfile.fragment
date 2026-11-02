@@ -1,0 +1,28 @@
+# Append to the maintained Fedora Dockerfile; production stages remain unchanged.
+# hadolint ignore=DL3006
+FROM vnc-build AS native-tests
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
+WORKDIR /source
+COPY test/native/packages.txt /build-support/packages/native-test.txt
+RUN /build-support/install-packages native-test
+COPY .clang-tidy .clangd /source/
+COPY Dockerfile.fedora-44 /source/
+COPY build/install-packages build/create-user build/normalize-runtime build/collect-artifacts build/tigervnc-viewer build/websockify-requirements.txt /source/build/
+COPY build/packages/fedora/ /source/build/packages/fedora/
+COPY patches/ /source/patches/
+COPY native/ /source/native/
+COPY compat/ /source/compat/
+COPY test/native/ /source/test/native/
+COPY test/egl-fence-stub.cpp test/egl-fence-test.cpp /source/test/
+RUN printf '\ninclude(/source/test/native/tigervnc-enter.cmake)\n' >> /tigervnc-source/vncviewer/CMakeLists.txt \
+    && cmake -S /tigervnc-source -B /tigervnc-build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    && cmake --build /tigervnc-build --parallel 2 --target viewport-enter viewer-crypto \
+    && printf '\ninclude(/source/test/native/krfb-frame-unit.cmake)\n' >> /krfb-source/framebuffers/pipewire/CMakeLists.txt \
+    && cmake -S /krfb-source -B /krfb-build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    && cmake --build /krfb-build --parallel 2 --target krfb-frame-unit \
+    && cmake -S test/native -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKRFB_SOURCE_DIR=/krfb-source \
+    && cmake --build build --parallel 2 \
+    && python3 -c 'import json; from pathlib import Path; files=[Path("build/compile_commands.json"),Path("/tigervnc-build/compile_commands.json"),Path("/krfb-build/compile_commands.json")]; commands=[command for path in files for command in json.loads(path.read_text())]; files[0].write_text(json.dumps(commands,indent=2)+"\n")' \
+    && chmod +x test/native/run.sh test/native/compiler-lint.sh
+ENTRYPOINT ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 800x600x24 -nolisten tcp", "/source/test/native/run.sh"]
+CMD []

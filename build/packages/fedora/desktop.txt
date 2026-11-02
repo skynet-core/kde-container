@@ -1,8 +1,6 @@
 plasma-desktop
 plasma-workspace
-plasma-workspace-x11
 kwin
-kwin-x11
 kscreen
 konsole
 dolphin
@@ -34,3 +32,7 @@ ca-certificates
 tar
 gzip
 xkeyboard-config
+kf6-kservice
+libkscreen
+libglvnd-gles
+xorg-x11-server-Xorg

@@ -2,9 +2,19 @@
 // Test-only editor: the output file is written exclusively by a Save UI action.
 #include <QApplication>
 #include <QClipboard>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusReply>
+#include <QDBusUnixFileDescriptor>
+#include <QDebug>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileDevice>
+#include <QFileInfo>
+#include <QGuiApplication>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMimeData>
@@ -12,16 +22,120 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
+#include <QScreen>
 #include <QShortcut>
 #include <QString>
+#include <QTemporaryFile>
 #include <QTextEdit>
+#include <QThread>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <cstdio>
 #include <functional>
 #include <qnamespace.h>
+#include <qtenvironmentvariables.h>
+#include <qtypes.h>
+
+int captureOutput(const QString &destination, bool includeCursor = false) {
+  auto *screen = QGuiApplication::primaryScreen();
+  if (!screen) {
+    std::fprintf(stderr, "No compositor output is available\n");
+    return 1;
+  }
+  QImage image;
+  QString method;
+  if (QGuiApplication::platformName() == "xcb") {
+    if (includeCursor) {
+      std::fprintf(stderr,
+                   "Cursor capture requires the Wayland screenshot API\n");
+      return 1;
+    }
+    QSize size = screen->size();
+    // NVIDIA's virtual Xorg root has no RandR monitor, so Qt reports 0x0.
+    if (size.isEmpty())
+      size = QSize(qEnvironmentVariableIntValue("DISPLAY_WIDTH"),
+                   qEnvironmentVariableIntValue("DISPLAY_HEIGHT"));
+    image = screen->grabWindow(0, 0, 0, size.width(), size.height()).toImage();
+    method = "x11-root";
+  } else {
+    QTemporaryFile pixels;
+    if (!pixels.open()) {
+      std::fprintf(stderr, "Cannot open screenshot buffer: %s\n",
+                   qPrintable(pixels.errorString()));
+      return 1;
+    }
+    const QRect area = screen->geometry();
+    auto call = QDBusMessage::createMethodCall(
+        "org.kde.KWin.ScreenShot2", "/org/kde/KWin/ScreenShot2",
+        "org.kde.KWin.ScreenShot2", "CaptureArea");
+    call.setArguments(
+        {area.x(), area.y(), uint(area.width()), uint(area.height()),
+         QVariantMap{{"include-cursor", includeCursor},
+                     {"hide-caller-windows", false}},
+         QVariant::fromValue(QDBusUnixFileDescriptor(pixels.handle()))});
+    QDBusReply<QVariantMap> reply =
+        QDBusConnection::sessionBus().call(call, QDBus::Block, 10000);
+    if (!reply.isValid()) {
+      std::fprintf(stderr, "KWin output capture failed: %s: %s\n",
+                   qPrintable(reply.error().name()),
+                   qPrintable(reply.error().message()));
+      return 1;
+    }
+    const auto attributes = reply.value();
+    const int width = attributes.value("width").toInt();
+    const int height = attributes.value("height").toInt();
+    const int stride = attributes.value("stride").toInt();
+    const auto format =
+        static_cast<QImage::Format>(attributes.value("format").toInt());
+    const qint64 size = qint64(stride) * height;
+    if (width <= 0 || height <= 0 || stride <= 0 ||
+        size > qint64(128) * 1024 * 1024) {
+      std::fprintf(stderr, "KWin returned invalid screenshot dimensions\n");
+      return 1;
+    }
+    // KWin sends metadata before its worker finishes writing the image FD.
+    QElapsedTimer timeout;
+    timeout.start();
+    while (QFileInfo(pixels.fileName()).size() < size &&
+           timeout.elapsed() < 10000)
+      QThread::msleep(10);
+    if (QFileInfo(pixels.fileName()).size() != size || !pixels.seek(0)) {
+      std::fprintf(stderr, "KWin did not finish the screenshot buffer\n");
+      return 1;
+    }
+    const QByteArray bytes = pixels.readAll();
+    image = QImage(reinterpret_cast<const uchar *>(bytes.constData()), width,
+                   height, stride, format)
+                .copy();
+    method = "kwin-screenshot2";
+  }
+  if (image.isNull() || !image.save(destination, "PNG")) {
+    std::fprintf(stderr, "Cannot save compositor screenshot: %s\n",
+                 qPrintable(destination));
+    return 1;
+  }
+  QJsonObject attributes{
+      {"method", method}, {"width", image.width()}, {"height", image.height()}};
+  if (includeCursor)
+    attributes.insert("include_cursor", true);
+  const auto metadata =
+      QJsonDocument(attributes).toJson(QJsonDocument::Compact);
+  // Machine-readable results must survive QT_LOGGING_RULES disabling qInfo.
+  std::printf("%s\n", metadata.constData());
+  std::fflush(stdout);
+  return 0;
+}
 
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
+  QGuiApplication::setDesktopFileName("plasma-ui-fixture");
+  if (argc == 3) {
+    const QString option = QString::fromLocal8Bit(argv[1]);
+    if (option == "--capture-output" ||
+        option == "--capture-output-with-cursor")
+      return captureOutput(QString::fromLocal8Bit(argv[2]),
+                           option == "--capture-output-with-cursor");
+  }
   const bool publishImage =
       argc == 3 && QString::fromLocal8Bit(argv[2]) == "--publish-image";
   const bool images =
@@ -107,6 +221,8 @@ int main(int argc, char **argv) {
   layout->addWidget(editor);
   auto save = new QPushButton("Save to host file (Ctrl+S)");
   save->setFixedHeight(36);
+  save->setStyleSheet(
+      "background: rgb(36,88,180); color: white; border: 1px solid black;");
   layout->addWidget(save);
   auto status = new QLabel("Unsaved");
   layout->addWidget(status);

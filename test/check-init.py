@@ -10,7 +10,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
-BACKENDS = ("wayland", "x11") if Path("/usr/bin/kwin_x11").exists() else ("wayland",)
+KIOSK_BACKENDS = ("wayland", "x11") if shutil.which("kwin_x11") else ("wayland",)
+DESKTOP_BACKENDS = KIOSK_BACKENDS if shutil.which("startplasma-x11") else ("wayland",)
 
 
 class InitTests(unittest.TestCase):
@@ -74,30 +75,75 @@ class InitTests(unittest.TestCase):
         return config
 
     def test_all_supported_targets(self):
-        for backend in BACKENDS:
+        self.assertIn("x11", KIOSK_BACKENDS, "Maintained images must include KWin X11")
+        for target_app, backends in (
+            ("", DESKTOP_BACKENDS),
+            ("konsole", KIOSK_BACKENDS),
+        ):
+            for backend in backends:
+                for mode in ("headless", "vnc", "web", "nested"):
+                    with (
+                        self.subTest(target_app=target_app, backend=backend, mode=mode),
+                        socket.socket(socket.AF_UNIX) as fixture,
+                    ):
+                        path = "/tmp/plasma-test-wayland"
+                        Path(path).unlink(missing_ok=True)
+                        fixture.bind(path)
+                        config = self.boot(
+                            TARGET_APP=target_app,
+                            DISPLAY_BACKEND=backend,
+                            DISPLAY_MODE=mode,
+                            HOST_WAYLAND_DISPLAY=path,
+                        )
+                        self.assertEqual(config["DISPLAY_BACKEND"], backend)
+                        self.assertEqual(config["DISPLAY_MODE"], mode)
+                        self.assertEqual(config["TARGET_APP"], target_app)
+                        nested_relay = mode == "nested" and (
+                            config["PLASMA_SOFTWARE_NESTED"] == "1"
+                            or config["PLASMA_NVIDIA_NESTED"] == "1"
+                        )
+                        password_path = Path("/etc/plasma/vnc-password")
+                        auth_path = Path("/etc/plasma/vnc-auth")
+                        if mode == "headless" or (
+                            mode == "nested" and not nested_relay
+                        ):
+                            self.assertFalse(password_path.exists())
+                            self.assertFalse(auth_path.exists())
+                        else:
+                            for secret in (password_path, auth_path):
+                                self.assertEqual(secret.stat().st_mode & 0o777, 0o600)
+                            if nested_relay:
+                                password = password_path.read_text()
+                                self.assertRegex(password, r"\A[0-9a-f]{8}\Z")
+                                self.assertNotEqual(password, "testpass")
+                                self.assertEqual(auth_path.stat().st_size, 8)
+                            else:
+                                self.assertEqual(password_path.read_text(), "testpass")
+                        Path(path).unlink()
+
+    def test_unavailable_desktop_targets_are_rejected(self):
+        for backend in set(KIOSK_BACKENDS) - set(DESKTOP_BACKENDS):
             for mode in ("headless", "vnc", "web", "nested"):
                 with (
                     self.subTest(backend=backend, mode=mode),
                     socket.socket(socket.AF_UNIX) as fixture,
                 ):
-                    path = "/tmp/plasma-test-wayland"
+                    path = "/tmp/plasma-test-unavailable-desktop-wayland"
                     Path(path).unlink(missing_ok=True)
                     fixture.bind(path)
-                    config = self.boot(
-                        DISPLAY_BACKEND=backend,
-                        DISPLAY_MODE=mode,
-                        HOST_WAYLAND_DISPLAY=path,
-                    )
-                    self.assertEqual(config["DISPLAY_BACKEND"], backend)
-                    self.assertEqual(config["DISPLAY_MODE"], mode)
-                    if mode in ("headless", "nested"):
-                        self.assertFalse(Path("/etc/plasma/vnc-password").exists())
-                    else:
-                        self.assertEqual(
-                            Path("/etc/plasma/vnc-password").stat().st_mode & 0o777,
-                            0o600,
+                    try:
+                        self.assertIn(
+                            "This image has no usable KWin X11 session",
+                            self.boot(
+                                expected=1,
+                                DISPLAY_BACKEND=backend,
+                                DISPLAY_MODE=mode,
+                                HOST_WAYLAND_DISPLAY=path,
+                                TARGET_APP="",
+                            ),
                         )
-                    Path(path).unlink()
+                    finally:
+                        Path(path).unlink(missing_ok=True)
 
     def test_clipboard_sync_scoping(self):
         self.assertEqual(self.boot()["CLIPBOARD_SYNC"], "0")
@@ -293,24 +339,45 @@ class InitTests(unittest.TestCase):
         )
         self.assertEqual(software["LIBGL_ALWAYS_SOFTWARE"], "1")
         self.assertEqual(software["QT_QUICK_BACKEND"], "software")
-        self.assertEqual(software["PLASMA_SOFTWARE_CAPTURE"], "0")
-        remote = self.boot(
-            DISPLAY_BACKEND="wayland", DISPLAY_MODE="web", LIBGL_ALWAYS_SOFTWARE="1"
-        )
+        private_kwin = Path("/opt/kwin-6.8.2/bin/kwin_wayland").is_file()
+        opengl_capture = Path("/etc/plasma/opengl-software-capture").exists()
         self.assertEqual(
-            remote["PLASMA_SOFTWARE_CAPTURE"],
-            "0" if Path("/etc/plasma/opengl-software-capture").exists() else "1",
+            software["PLASMA_SOFTWARE_CAPTURE"],
+            "0" if opengl_capture and not private_kwin else "1",
         )
-        self.assertEqual(remote["PLASMA_SOFTWARE_DISPLAY"], ":110")
-        if "x11" in BACKENDS:
+        for target_app in ("", "konsole"):
+            for mode in ("headless", "vnc", "web"):
+                with self.subTest(target_app=target_app, mode=mode):
+                    remote = self.boot(
+                        TARGET_APP=target_app,
+                        DISPLAY_BACKEND="wayland",
+                        DISPLAY_MODE=mode,
+                        LIBGL_ALWAYS_SOFTWARE="1",
+                    )
+                    self.assertEqual(
+                        remote["PLASMA_SOFTWARE_CAPTURE"],
+                        "0"
+                        if opengl_capture and (target_app or not private_kwin)
+                        else "1",
+                    )
+                    self.assertEqual(remote["PLASMA_SOFTWARE_DISPLAY"], ":110")
+        if "x11" in DESKTOP_BACKENDS:
             x11 = self.boot(
                 DISPLAY_BACKEND="x11", DISPLAY_MODE="vnc", LIBGL_ALWAYS_SOFTWARE="1"
             )
             self.assertEqual(x11["PLASMA_SOFTWARE_CAPTURE"], "0")
         else:
             self.assertIn(
-                "no Plasma X11 session", self.boot(expected=1, DISPLAY_BACKEND="x11")
+                "This image has no usable KWin X11 session",
+                self.boot(expected=1, DISPLAY_BACKEND="x11"),
             )
+        kiosk_x11 = self.boot(
+            TARGET_APP="konsole",
+            DISPLAY_BACKEND="x11",
+            DISPLAY_MODE="vnc",
+            LIBGL_ALWAYS_SOFTWARE="1",
+        )
+        self.assertEqual(kiosk_x11["PLASMA_SOFTWARE_CAPTURE"], "0")
         self.assertIn(
             "LIBGL_ALWAYS_SOFTWARE",
             self.boot(expected=1, LIBGL_ALWAYS_SOFTWARE="invalid"),
@@ -325,12 +392,22 @@ class InitTests(unittest.TestCase):
             wayland.bind("/run/host/wayland")
             x11.bind("/run/host/X11/X0")
             self.assertEqual(self.boot()["DISPLAY_BACKEND"], "wayland")
+            self.assertEqual(
+                self.boot(TARGET_APP="konsole")["DISPLAY_BACKEND"], "wayland"
+            )
             Path("/run/host/wayland").unlink()
             config = self.boot(DISPLAY_MODE="nested")
             self.assertEqual(
-                config["DISPLAY_BACKEND"], "x11" if "x11" in BACKENDS else "wayland"
+                config["DISPLAY_BACKEND"],
+                "x11" if "x11" in DESKTOP_BACKENDS else "wayland",
             )
             self.assertEqual(config["HOST_DISPLAY"], ":0")
+            kiosk = self.boot(DISPLAY_MODE="nested", TARGET_APP="konsole")
+            self.assertEqual(
+                kiosk["DISPLAY_BACKEND"],
+                "x11" if "x11" in KIOSK_BACKENDS else "wayland",
+            )
+            self.assertEqual(kiosk["HOST_DISPLAY"], ":0")
             Path("/run/host/X11/X0").unlink()
 
     def test_regular_file_is_not_a_display_socket(self):
