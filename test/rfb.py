@@ -10,15 +10,15 @@ from PIL import Image
 
 
 class RFBClient:
-    def __init__(self, port, password="testpass", web=False):
+    def __init__(self, port, password="testpass", web=False, host="127.0.0.1"):
         if web:
             self.connection = websocket.create_connection(
-                f"ws://127.0.0.1:{port}/websockify", timeout=20, subprotocols=["binary"]
+                f"ws://{host}:{port}/websockify", timeout=20, subprotocols=["binary"]
             )
             self.send = self.connection.send_binary
             self.receive = self.connection.recv
         else:
-            self.connection = socket.create_connection(("127.0.0.1", port), timeout=20)
+            self.connection = socket.create_connection((host, port), timeout=20)
             self.send = self.connection.sendall
             self.receive = lambda: self.connection.recv(1024 * 1024)
         self.pending = bytearray()

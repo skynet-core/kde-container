@@ -90,6 +90,42 @@ class RfbProtocolTests(unittest.TestCase):
                 ):
                     RFBClient(45678)
 
+    def test_explicit_host_routes_tcp_and_websocket_to_the_requested_port(self):
+        for web in (False, True):
+            with self.subTest(web=web):
+                wire = Wire(handshake())
+                transport = (
+                    "websocket.create_connection" if web else "socket.create_connection"
+                )
+                with patch(transport, return_value=wire) as connect:
+                    client = RFBClient(5900, "testpass", web, host="192.0.2.42")
+                if web:
+                    connect.assert_called_once_with(
+                        "ws://192.0.2.42:5900/websockify",
+                        timeout=20,
+                        subprotocols=["binary"],
+                    )
+                else:
+                    connect.assert_called_once_with(("192.0.2.42", 5900), timeout=20)
+                self.assertEqual((client.width, client.height), (3, 2))
+                self.assertEqual(wire.sent[2].hex(), "177cc6afb100cbf3666dbc5efaa5f1c1")
+                client.close()
+                self.assertTrue(wire.closed)
+
+    def test_explicit_host_preserves_connection_errors(self):
+        for web in (False, True):
+            with self.subTest(web=web):
+                transport = (
+                    "websocket.create_connection" if web else "socket.create_connection"
+                )
+                with (
+                    patch(
+                        transport, side_effect=ConnectionRefusedError("test endpoint")
+                    ),
+                    self.assertRaisesRegex(ConnectionRefusedError, "test endpoint"),
+                ):
+                    RFBClient(5900, web=web, host="192.0.2.42")
+
     def test_capture_handles_bells_clipboard_messages_and_offset_rectangles(self):
         pixels = bytes.fromhex("0000ff00 00ff0000")
         frame = (
