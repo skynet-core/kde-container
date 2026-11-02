@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -397,6 +398,139 @@ else:
     client.screenshot().save(case / "05-chromium-image-pasted.png")
 
 
+def wait_dolphin(runtime, inner, config, case):
+    # Detached exec acknowledges process launch, not its active application window.
+    tag = "CLIPBOARD_DOLPHIN_" + uuid.uuid4().hex
+    script = "/run/plasma/" + tag + ".js"
+    body = """function snapshot() {
+    const w = workspace.activeWindow;
+    console.warn(TAG + ' ' + JSON.stringify(w ? {
+        pid:w.pid, normal:w.normalWindow, active:w.active,
+        minimized:w.minimized, hidden:w.hidden,
+        frame:{x:w.frameGeometry.x,y:w.frameGeometry.y,
+               width:w.frameGeometry.width,height:w.frameGeometry.height}
+    } : null));
+}
+function watch(w) {
+    w.frameGeometryChanged.connect(snapshot);
+    w.minimizedChanged.connect(snapshot);
+    w.hiddenChanged.connect(snapshot);
+}
+workspace.stackingOrder.forEach(watch);
+workspace.windowAdded.connect(function(w) { watch(w); snapshot(); });
+workspace.windowActivated.connect(snapshot);
+snapshot();
+""".replace("TAG", json.dumps(tag))
+
+    def command(*arguments):
+        result = run(runtime, "exec", inner, *arguments, timeout=5)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    def dbus(*arguments):
+        result = run(
+            runtime,
+            "exec",
+            "--user=plasma",
+            inner,
+            "env",
+            *display_environment(config),
+            "QT_QPA_PLATFORM=offscreen",
+            "qdbus-qt6",
+            "org.kde.KWin",
+            *arguments,
+            timeout=5,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    command(
+        "python3",
+        "-c",
+        "from pathlib import Path; import sys; Path(sys.argv[1]).write_text(sys.argv[2])",
+        script,
+        body,
+    )
+    deadline = time.monotonic() + 20
+    try:
+        identifier = int(dbus("/Scripting", "loadScript", script, tag).strip())
+        assert identifier >= 0, "Dolphin readiness script failed to load"
+        dbus(f"/Scripting/Script{identifier}", "run")
+        while True:
+            journal = run(
+                runtime,
+                "exec",
+                inner,
+                "journalctl",
+                "-u",
+                "plasma-session.service",
+                "--no-pager",
+                "-o",
+                "cat",
+                "-g",
+                tag,
+                timeout=5,
+            )
+            assert journal.returncode == 0 or (
+                journal.returncode == 1 and not journal.stdout and not journal.stderr
+            ), journal.stderr
+            lines = [
+                line.split(tag + " ", 1)[1]
+                for line in journal.stdout.splitlines()
+                if tag + " " in line
+            ]
+            window = json.loads(lines[-1]) if lines else None
+            if (
+                window
+                and window["normal"] is True
+                and window["active"] is True
+                and window["minimized"] is False
+                and window["hidden"] is False
+                and window["frame"]["width"] > 0
+                and window["frame"]["height"] > 0
+                and type(window["pid"]) is int
+                and window["pid"] > 0
+            ):
+                process = run(
+                    runtime,
+                    "exec",
+                    inner,
+                    "python3",
+                    "-c",
+                    "from pathlib import Path; import json,sys; p=Path('/proc')/sys.argv[1]; "
+                    "print(json.dumps({'argv':p.joinpath('cmdline').read_bytes().decode().split(chr(0))[:-1],"
+                    "'state':p.joinpath('stat').read_text().rsplit(')',1)[1].split()[0]}))",
+                    str(window["pid"]),
+                    timeout=5,
+                )
+                if process.returncode == 0:
+                    identity = json.loads(process.stdout)
+                    argv = identity["argv"]
+                    if (
+                        identity["state"] != "Z"
+                        and argv
+                        and Path(argv[0]).name == "dolphin"
+                        and "--new-window" in argv
+                        and "/e2e-images/dolphin" in argv
+                    ):
+                        (case / "dolphin-ready.json").write_text(
+                            json.dumps(
+                                {"window": window, "process": identity}, indent=2
+                            )
+                            + "\n"
+                        )
+                        return
+            assert time.monotonic() < deadline, (
+                f"Dolphin did not become the active application window: {window}"
+            )
+            time.sleep(0.1)
+    finally:
+        try:
+            dbus("/Scripting", "unloadScript", tag)
+        finally:
+            command("rm", "-f", script)
+
+
 def dolphin_image_check(runtime, inner, config, case, client, host_probe, inner_probe):
     # Close only our image-bearing apps; host Alt+F4 can close nested KWin.
     stopped = run(
@@ -462,7 +596,7 @@ else:
         "/e2e-images/dolphin",
     )
     assert result.returncode == 0, result.stderr
-    time.sleep(2)
+    wait_dolphin(runtime, inner, config, case)
     client.click(client.width // 2, client.height // 2)
     # Copy after app startup/cleanup so a previous selection owner cannot race
     # this paste; restored history can still include the retired ownership MIME.
