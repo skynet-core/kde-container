@@ -1,7 +1,7 @@
 """Local test page: save only images pasted through Chromium's real paste event."""
 
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PAGE = b"""<!doctype html><meta charset="utf-8"><title>Clipboard screenshot test</title>
@@ -51,4 +51,4 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    HTTPServer(("127.0.0.1", 8790), Handler).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", 8790), Handler).serve_forever()
