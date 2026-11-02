@@ -35,3 +35,6 @@ ca-certificates
 tar
 gzip
 qt6-tools
+kservice
+libkscreen
+xorg-server

@@ -93,7 +93,7 @@ def main():
     options = parser.parse_args()
     runtime = options.runtime
     if options.backends is None:
-        options.backends = available_backends(runtime, options.image)
+        options.backends = available_backends(runtime, options.image, kiosk=True)
     root = Path(__file__).resolve().parents[1]
     artifacts = (
         root
@@ -174,6 +174,11 @@ def main():
                             )
                         )
                     initial_state = state(runtime, name)
+                    report["initial_app_state"] = initial_state
+                    if not initial_state.get("pid"):
+                        raise RuntimeError(
+                            "Target application did not report a running PID"
+                        )
                     initial_processes = processes(runtime, name)
                     forbidden = {
                         "plasmashell",
@@ -194,7 +199,6 @@ def main():
                     report["checks"]["target_running"] = str(
                         initial_state["pid"]
                     ) in dict(initial_processes)
-                    report["initial_app_state"] = initial_state
                     if mode in ("vnc", "web"):
                         port = 5900 if mode == "vnc" else 6080
                         address = run(
@@ -273,7 +277,7 @@ def main():
                         while True:
                             current = state(runtime, name)
                             if (
-                                current
+                                current.get("pid")
                                 and current["pid"] != initial_state["pid"]
                                 and run(
                                     runtime, "exec", name, "plasma-healthcheck"

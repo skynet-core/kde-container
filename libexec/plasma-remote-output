@@ -6,12 +6,35 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+
+def kscreen(*arguments, **options):
+    environment = dict(os.environ)
+    binary = "kscreen-doctor"
+    prefix = Path("/opt/kwin-6.8.2")
+    if os.environ.get("TARGET_APP") and (prefix / "bin/kscreen-doctor").is_file():
+        # KWin 6.8 replaced the output-device global with a registry. Its
+        # matching client needs the private Qt stack, scoped to this process.
+        binary = str(prefix / "bin/kscreen-doctor")
+        environment["LD_LIBRARY_PATH"] = str(prefix / "lib") + (
+            ":" + environment["LD_LIBRARY_PATH"]
+            if environment.get("LD_LIBRARY_PATH")
+            else ""
+        )
+        environment["QT_PLUGIN_PATH"] = str(prefix / "plugins")
+        environment["QML_IMPORT_PATH"] = str(prefix / "qml")
+        environment.pop("QML2_IMPORT_PATH", None)
+        environment["XDG_DATA_DIRS"] = (
+            str(prefix / "share")
+            + ":"
+            + environment.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
+        )
+    return subprocess.run([binary, *arguments], env=environment, check=True, **options)
 
 
 def outputs():
-    result = subprocess.run(
-        ["kscreen-doctor", "-j"], capture_output=True, text=True, timeout=5, check=True
-    )
+    result = kscreen("-j", capture_output=True, text=True, timeout=5)
     items = json.loads(result.stdout)["outputs"]
     if any(not {"id", "name"}.issubset(item) for item in items):
         raise ValueError("Waiting for complete output information")
@@ -58,7 +81,7 @@ if os.environ["DISPLAY_BACKEND"] == "wayland":
                     for item in items
                     if item is not remote and item["enabled"]
                 ]
-                subprocess.run(["kscreen-doctor", *commands], check=True, timeout=5)
+                kscreen(*commands, timeout=5)
         except (subprocess.SubprocessError, ValueError) as error:
             if "--check" in sys.argv or time.monotonic() >= deadline:
                 sys.exit(str(error))

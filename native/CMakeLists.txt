@@ -3,7 +3,7 @@ project(plasma_container_input LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_AUTOMOC ON)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets DBus)
 find_package(KF6CoreAddons REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
@@ -26,7 +26,7 @@ target_include_directories(kwin PRIVATE "${KRFB_SOURCE_DIR}/krfb" "${RFB_INCLUDE
 target_link_libraries(kwin PRIVATE Qt6::Widgets KF6::CoreAddons PkgConfig::WAYLAND PkgConfig::XKB "${KRFB_PRIVATE}")
 
 add_executable(plasma-ui-fixture ui-fixture.cpp)
-target_link_libraries(plasma-ui-fixture PRIVATE Qt6::Widgets)
+target_link_libraries(plasma-ui-fixture PRIVATE Qt6::Widgets Qt6::DBus)
 
 add_executable(plasma-vnc-benchmark vnc-benchmark.cpp)
 target_link_libraries(plasma-vnc-benchmark PRIVATE Qt6::Widgets)

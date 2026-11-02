@@ -26,20 +26,11 @@ python3 build/render-dockerfiles.py --check
 hadolint --failure-threshold info "${dockerfiles[@]}"
 actionlint
 clang-format --dry-run --Werror "${cpp_files[@]}"
-[[ -f build/compile_commands.json ]] || {
-    printf 'Configure and build native/ first; see README.md#linting.\n' >&2
-    exit 1
-}
-for file in "${cpp_files[@]}"; do
-    log="$artifacts/$(basename -- "$file").clangd.log"
-    # Refactoring self-tests are separate from compiler, include and tidy diagnostics.
-    if ! clangd --check="$file" --clang-tidy --tweaks= > "$log" 2>&1 || rg -q '^[EW]\[' "$log"; then
-        cat "$log"
-        exit 1
-    fi
-done
-clang-tidy --quiet -p build native/*.cpp
-clang-tidy --quiet compat/*.cpp -- -std=c++17
+if [[ -n ${NATIVE_TEST_IMAGE:-} ]]; then
+    python3 test/native/sdk-inputs.py "$NATIVE_TEST_IMAGE" "$artifacts" "${cpp_files[@]}"
+else
+    bash test/native/compiler-lint.sh "$artifacts" "${cpp_files[@]}"
+fi
 xmllint --noout --dtdvalid /usr/share/wayland/wayland.dtd native/*.xml
 xmllint --noout docs/diagrams/*.svg
 python3 -m json.tool docs/diagrams/config.json > /dev/null

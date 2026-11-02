@@ -12,6 +12,10 @@ on:
         type: boolean
         default: true
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 
@@ -23,7 +27,7 @@ jobs:
   images:
     name: ${{ matrix.distro }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 90
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: write
@@ -32,17 +36,18 @@ jobs:
       matrix:
         include:
           - distro: fedora-44
-            backends: wayland x11
+            desktop-backends: wayland
           - distro: debian-13
-            backends: wayland x11
+            desktop-backends: wayland x11
           - distro: ubuntu-26.04
-            backends: wayland x11
+            desktop-backends: wayland x11
           - distro: archlinux
-            backends: wayland
+            desktop-backends: wayland
     env:
       PRODUCTION_IMAGE: plasma6:${{ matrix.distro }}
       UI_IMAGE: plasma6:${{ matrix.distro }}-ui-test
-      TEST_BACKENDS: ${{ matrix.backends }}
+      TEST_BACKENDS: ${{ matrix.desktop-backends }}
+      KIOSK_BACKENDS: wayland x11
 
     steps:
       - uses: actions/checkout@v7
@@ -62,10 +67,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - uses: docker/setup-buildx-action@v4
 
-      - name: Prepare Arch software rendering buffers
-        if: matrix.distro == 'archlinux'
+      - name: Prepare software OpenGL rendering buffers
         run: |
-          # KWin 6.8 uses Mesa software OpenGL with kernel DMA buffers, even without a GPU.
+          # Fedora/Arch KWin and the source kiosk stack use software OpenGL.
           if [[ ! -c /dev/udmabuf ]]; then sudo modprobe udmabuf; fi
           sudo udevadm settle
           sudo chgrp "$(id -g)" /dev/udmabuf
@@ -134,20 +138,32 @@ jobs:
           tags: ${{ env.UI_IMAGE }}
           cache-from: type=gha,scope=plasma6-${{ matrix.distro }}
 
+      - name: Verify Chromium sandbox fallback with user namespaces denied
+        run: |
+          docker run --rm --privileged --userns=host --network=none --shm-size=256m \
+              --mount "type=bind,source=$GITHUB_WORKSPACE/test,target=/test,readonly" \
+              --entrypoint /usr/bin/python3 "$UI_IMAGE" /test/check-browser-sandbox.py \
+              2>&1 | tee test/.artifacts/browser-sandbox.log
+
       - name: Verify remote mouse, typing, screenshots and Chromium kiosk
         run: |
           read -r -a backends <<< "$TEST_BACKENDS"
           uv run test/ui.py --image "$UI_IMAGE" --backends "${backends[@]}" 2>&1 | tee test/.artifacts/ui.log
-          uv run test/kiosk.py --image "$UI_IMAGE" --backends "${backends[@]}" --modes vnc web 2>&1 | tee test/.artifacts/kiosk.log
+          read -r -a kiosk_backends <<< "$KIOSK_BACKENDS"
+          uv run test/kiosk.py --image "$UI_IMAGE" --backends "${kiosk_backends[@]}" --modes headless vnc web 2>&1 | tee test/.artifacts/kiosk.log
 
-      - name: Verify nested clipboard and GUI copy-paste
+      - name: Verify desktop and kiosk nested clipboard and GUI copy-paste
         run: |
           # The parent desktop is another disposable container, so no host GUI
           # or access to the runner user's clipboard is required.
           read -r -a backends <<< "$TEST_BACKENDS"
           uv run test/clipboard.py --image "$UI_IMAGE" --backends "${backends[@]}" \
-              --host-backends "${backends[@]}" \
+              --host-backends wayland x11 \
               --no-gpu 2>&1 | tee test/.artifacts/clipboard.log
+          read -r -a kiosk_backends <<< "$KIOSK_BACKENDS"
+          uv run test/clipboard.py --image "$UI_IMAGE" --kiosk \
+              --backends "${kiosk_backends[@]}" --host-backends wayland x11 \
+              --no-gpu 2>&1 | tee test/.artifacts/clipboard-kiosk.log
 
       - name: Log in to GHCR
         if: steps.registry.outputs.publish == 'true'

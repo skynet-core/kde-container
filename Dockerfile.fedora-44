@@ -7,10 +7,10 @@ ARG PLASMA_GID=1000
 ARG NOVNC_VERSION=1.7.0
 ARG NOVNC_SHA256=b1003a11b6e6e8d8f7f5e5586daae7f8ca651d8aee0aa155ff9ac841c48f52c6
 
-# systemd needs root as PID 1; desktop services run as plasma.
+# PID 1 is root; every graphical process runs as plasma.
 # hadolint ignore=DL3002
 USER 0:0
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 COPY build/install-packages build/create-user build/normalize-runtime build/websockify-requirements.txt /build-support/
 COPY build/packages/fedora/desktop.txt /build-support/packages/desktop.txt
 RUN chmod +x /build-support/* \
@@ -25,6 +25,74 @@ RUN chmod +x /build-support/* \
     && ln -s vnc.html /opt/noVNC/index.html \
     && rm /tmp/novnc.tar.gz
 
+# Native plugins are built against this distro's exact Qt/KRFB libraries.
+FROM desktop-packages AS input-source
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
+COPY build/packages/fedora/input-build.txt /build-support/packages/input-build.txt
+ARG KRFB_SOURCE_VERSION=26.08.2
+ARG KRFB_SOURCE_SHA256=4f613500a2308f5b16b109ee4f113a69ea597cd03bdb19f8b6abd16ab914593e
+RUN /build-support/install-packages input-build \
+    && curl --fail --location --retry 3 \
+        "https://codeload.github.com/KDE/krfb/tar.gz/refs/tags/v${KRFB_SOURCE_VERSION}" \
+        --output /tmp/krfb.tar.gz \
+    && echo "${KRFB_SOURCE_SHA256}  /tmp/krfb.tar.gz" | sha256sum --check - \
+    && mkdir /krfb-source \
+    && tar -xzf /tmp/krfb.tar.gz --strip-components=1 -C /krfb-source \
+    && rm /tmp/krfb.tar.gz
+
+FROM input-source AS input-build
+COPY build/collect-artifacts /build-support/collect-artifacts
+COPY native/ /src/
+RUN cmake -S /src -B /build -G Ninja -DKRFB_SOURCE_DIR=/krfb-source \
+    && cmake --build /build --parallel 2 \
+    && /build-support/collect-artifacts input
+
+FROM input-build AS compat-build
+COPY compat/ /src/compat/
+COPY test/egl-fence-stub.cpp test/egl-fence-test.cpp /src/tests/
+RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -lX11 -ldl -o /xtest-paced.so \
+    && c++ -shared -fPIC -O2 /src/compat/egl-fence-wait.cpp -ldl -o /egl-fence-wait.so \
+    && c++ -shared -fPIC -O2 /src/compat/wayland-pointer-enter.cpp -lwayland-client -ldl -o /wayland-pointer-enter.so \
+    && mkdir /fake-egl \
+    && c++ -shared -fPIC -O2 /src/tests/egl-fence-stub.cpp -pthread -o /fake-egl/libEGL.so.1 \
+    && c++ -O2 /src/tests/egl-fence-test.cpp -ldl -o /test-egl-fence \
+    && LD_LIBRARY_PATH=/fake-egl python3 -c 'import os, subprocess; [subprocess.run(["/test-egl-fence", "/egl-fence-wait.so"], env={**os.environ, "FAKE_EGL_VENDOR": vendor}, timeout=5, check=True) for vendor in ("NVIDIA", "Mesa")]'
+
+FROM input-source AS vnc-build
+ARG TIGERVNC_VIEWER_VERSION=1.16.0
+ARG TIGERVNC_VIEWER_SHA256=10512fc0254ae3bde41c19d18c15f7ebd8cd476261afe0611c41965d635d46e8
+COPY build/packages/fedora/vnc-build.txt /build-support/packages/vnc-build.txt
+RUN /build-support/install-packages vnc-build
+COPY build/collect-artifacts /build-support/collect-artifacts
+COPY build/tigervnc-viewer /build-support/tigervnc-viewer
+COPY patches/tigervnc-pointer-enter.patch /tmp/tigervnc-pointer-enter.patch
+COPY patches/tigervnc-digest-sizes.patch /tmp/tigervnc-digest-sizes.patch
+COPY patches/tigervnc-nettle4.patch /tmp/tigervnc-nettle4.patch
+COPY patches/krfb-low-latency.patch /tmp/krfb-low-latency.patch
+COPY native/framebuffer-geometry.h /krfb-source/krfb/framebuffer-geometry.h
+COPY patches/krfb-existing-output.patch /tmp/krfb-existing-output.patch
+COPY patches/krfb-initial-framebuffer.patch /tmp/krfb-initial-framebuffer.patch
+COPY patches/krfb-loopback-relay.patch /tmp/krfb-loopback-relay.patch
+RUN --mount=type=bind,from=desktop-packages,source=/,target=/desktop-baseline,ro \
+    patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-low-latency.patch \
+    && patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-existing-output.patch \
+    && patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-initial-framebuffer.patch \
+    && patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-loopback-relay.patch \
+    && cmake -S /krfb-source -B /krfb-build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    && cmake --build /krfb-build --parallel 2 --target krfb-virtualmonitor krfb_framebuffer_pw \
+    && /build-support/tigervnc-viewer \
+    && /build-support/collect-artifacts vnc
+
+# DISTRO_X11_BUILDER
+FROM desktop-packages AS x11-build
+COPY build/packages/fedora/x11-build.txt /build-support/packages/x11-build.txt
+COPY build/arch-kwin-x11 /build-support/arch-kwin-x11
+RUN /build-support/install-packages x11-build \
+    && bash /build-support/arch-kwin-x11
+
+# DISTRO_KWIN_BUILDER
+
 FROM desktop-packages AS desktop
 # Extend the inherited /init.d/init.sh; 400 runs before 501-systemd and 999-exec.
 COPY init.d/modules/ /init.d/modules/
@@ -32,11 +100,24 @@ COPY bin/plasma-healthcheck /usr/local/bin/plasma-healthcheck
 COPY libexec/ /usr/local/libexec/
 COPY systemd/system/ /etc/systemd/system/
 COPY config/ /etc/xdg/
+COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /wayland-pointer-enter.so /usr/local/lib/plasma6/
+# DISTRO_KWIN_RUNTIME
+# DISTRO_X11_RUNTIME
+COPY build/packages/fedora/x11-runtime.txt /build-support/packages/x11-runtime.txt
+RUN /build-support/install-packages x11-runtime
+COPY --from=x11-build /out/root/ /
 # DISTRO_RUNTIME_CONFIG
+# KWin 6.8 removed QPainter; use software OpenGL for capture.
+RUN touch /etc/plasma/opengl-software-capture
 RUN chmod +x /init.d/modules/*.sh /usr/local/bin/* /usr/local/libexec/* \
         /usr/local/libexec/plasma-backend/kwin_wayland \
     && command -v kscreen-doctor \
-    # Presets skip already-masked units, so remove package enablement links first.
+    && test -x /usr/bin/kwin_wayland \
+    && test -x /usr/bin/kwin_x11 \
+    && ldd /usr/bin/kwin_x11 >/tmp/kwin-x11.ldd \
+    && ! grep -F 'not found' /tmp/kwin-x11.ldd \
+    && rm /tmp/kwin-x11.ldd \
+    && python3 -c 'import ctypes; ctypes.CDLL("libGLESv2.so.2")' \
     && if [[ -f /usr/lib/systemd/system/NetworkManager.service ]]; then \
         systemctl --root=/ disable NetworkManager.service; \
     fi \
@@ -54,82 +135,40 @@ ENV MODULE_SYSTEMD_ENABLED=true \
 EXPOSE 5900 6080
 HEALTHCHECK --interval=10s --timeout=5s --start-period=90s --retries=6 \
     CMD ["/usr/local/bin/plasma-healthcheck"]
-
-# PID 1 must remain root. The desktop and remote services use User=plasma.
 STOPSIGNAL SIGRTMIN+3
 ENTRYPOINT ["/init.d/init.sh"]
 CMD ["/usr/sbin/init", "--system"]
 
-# KRFB's virtual monitor has no portal session. Build its KWin input plugin
-# against the same private library as the runtime, leaving compilers out of it.
-FROM desktop-packages AS input-source
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-COPY build/packages/fedora/input-build.txt /build-support/packages/input-build.txt
-ARG KRFB_SOURCE_VERSION=26.08.2
-ARG KRFB_SOURCE_SHA256=4f613500a2308f5b16b109ee4f113a69ea597cd03bdb19f8b6abd16ab914593e
-RUN /build-support/install-packages input-build \
-    && curl --fail --location --retry 3 \
-        "https://codeload.github.com/KDE/krfb/tar.gz/refs/tags/v${KRFB_SOURCE_VERSION}" \
-        --output /tmp/krfb.tar.gz \
-    && echo "${KRFB_SOURCE_SHA256}  /tmp/krfb.tar.gz" | sha256sum --check - \
-    && mkdir /krfb-source \
-    && tar -xzf /tmp/krfb.tar.gz --strip-components=1 -C /krfb-source
-FROM input-source AS input-build
-COPY build/collect-artifacts /build-support/collect-artifacts
-COPY native/ /src/
-RUN cmake -S /src -B /build -G Ninja -DKRFB_SOURCE_DIR=/krfb-source \
-    && cmake --build /build \
-    && bash /build-support/collect-artifacts input
-
-FROM input-build AS compat-build
-COPY compat/ /src/compat/
-COPY test/egl-fence-stub.cpp test/egl-fence-test.cpp /src/tests/
-RUN c++ -shared -fPIC -O2 /src/compat/xtest-paced.cpp -ldl -o /xtest-paced.so \
-    && c++ -shared -fPIC -O2 /src/compat/egl-fence-wait.cpp -ldl -o /egl-fence-wait.so \
-    && mkdir /fake-egl \
-    && c++ -shared -fPIC -O2 /src/tests/egl-fence-stub.cpp -pthread -o /fake-egl/libEGL.so.1 \
-    && c++ -O2 /src/tests/egl-fence-test.cpp -ldl -o /test-egl-fence \
-    && LD_LIBRARY_PATH=/fake-egl python3 -c 'import os, subprocess; [subprocess.run(["/test-egl-fence", "/egl-fence-wait.so"], env={**os.environ, "FAKE_EGL_VENDOR": vendor}, timeout=5, check=True) for vendor in ("NVIDIA", "Mesa")]'
-
-# Baseline target intentionally retains stock KRFB, for reproducing the regression.
+# Baseline target intentionally retains stock KRFB for reproducing regressions.
 FROM desktop AS ui-baseline
 COPY --from=input-build /build/plasma-clipboard /usr/local/libexec/plasma-clipboard
 COPY --from=input-build /build/plasma-ui-fixture /usr/local/bin/plasma-ui-fixture
-COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /usr/local/lib/plasma6/
 
 FROM desktop AS input-runtime
 COPY --from=input-build /out/root/ /
-COPY --from=compat-build /xtest-paced.so /egl-fence-wait.so /usr/local/lib/plasma6/
 RUN sed -i '/^X-KDE-Wayland-Interfaces=/s/$/,org_kde_kwin_fake_input/' \
         /usr/share/applications/org.kde.krfb.virtualmonitor.desktop
 
-# Keep a working-input image with the distro's unmodified KRFB for A/B benchmarks.
+# Keep a working-input image with the distro KRFB for A/B benchmarks.
 FROM input-runtime AS ui-perf-baseline
 COPY --from=input-build /build/plasma-vnc-benchmark /usr/local/bin/plasma-vnc-benchmark
 
-# Rebuild upstream's virtual monitor and capture plugin with small latency fixes.
-# Event plugins and libkrfbprivate remain the distribution packages.
-FROM input-source AS vnc-build
-COPY build/packages/fedora/vnc-build.txt /build-support/packages/vnc-build.txt
-RUN /build-support/install-packages vnc-build
-COPY build/collect-artifacts /build-support/collect-artifacts
-COPY patches/krfb-low-latency.patch /tmp/krfb-low-latency.patch
-COPY patches/krfb-existing-output.patch /tmp/krfb-existing-output.patch
-RUN patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-low-latency.patch \
-    && patch --batch --fuzz=0 -d /krfb-source -p1 < /tmp/krfb-existing-output.patch \
-    && cmake -S /krfb-source -B /krfb-build -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
-    && cmake --build /krfb-build --target krfb-virtualmonitor krfb_framebuffer_pw \
-    && bash /build-support/collect-artifacts vnc
-
 FROM input-runtime AS runtime
 COPY --from=vnc-build /out/root/ /
+RUN ldd /usr/bin/vncviewer >/tmp/vncviewer.ldd \
+    && ! grep -F 'not found' /tmp/vncviewer.ldd \
+    && rm /tmp/vncviewer.ldd
 
 FROM runtime AS ui-test
 COPY build/install-packages /build-support/install-packages
 COPY build/packages/fedora/browser.txt /build-support/packages/browser.txt
 # DISTRO_BROWSER_ARTIFACTS
+# Fedora defaults to user namespaces; preserve SUID fallback on restricted hosts.
 RUN bash /build-support/install-packages browser \
+    && if [ -f /etc/fedora-release ]; then \
+        chown 0:0 /usr/lib64/chromium-browser/chrome-sandbox \
+        && chmod 4755 /usr/lib64/chromium-browser/chrome-sandbox; \
+    fi \
     && rm -rf /build-support
 COPY --from=input-build /build/plasma-ui-fixture /usr/local/bin/plasma-ui-fixture
 COPY --from=input-build /build/plasma-vnc-benchmark /usr/local/bin/plasma-vnc-benchmark

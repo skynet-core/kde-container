@@ -8,9 +8,9 @@ image=${IMAGE_TAG:-plasma6:local}
 import shutil
 assert not any(shutil.which(name) for name in ("chromium", "chromium-browser")), "Chromium belongs only in ui-test"
 '
-python3 "$root/test/unit.py"
+uv run "$root/test/unit.py"
 shellcheck "$root"/init.d/modules/*.sh "$root"/bin/plasma6-run \
-	"$root"/libexec/plasma-{session,xserver,vnc,host-display,software-display} \
+	"$root"/libexec/plasma-{session,xserver,vnc,host-display,software-display,nested-x11} \
 	"$root"/libexec/plasma-backend/kwin_wayland
 "$runtime" run --rm --user root --entrypoint /usr/bin/python3 \
 	--mount "type=bind,source=$root/test,target=/test,readonly" "$image" /test/check-init.py

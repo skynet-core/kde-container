@@ -54,6 +54,17 @@ individual X11 application windows through the Wayland compositor.
 | X11 | `vnc` | Xvfb plus x11vnc |
 | X11 | `web` | X11 VNC path plus websockify and noVNC |
 
+These X11 rows use Xvfb/Xephyr/Xwayland for software rendering. When a usable
+NVIDIA device is selected, a private Xorg virtual screen renders on that GPU
+without switching the host's virtual terminal. Nested hardware output is
+presented through an authenticated loopback viewer on the requested host
+transport. The launcher preserves explicit GPU/runtime/device settings and
+`LIBGL_ALWAYS_SOFTWARE=1` rather than replacing the caller's choice.
+
+Ordinary desktop capability also requires `startplasma-x11`; Fedora's current
+Plasma 6.8 and Arch packages no longer supply that session. Kiosks need only
+`kwin_x11`, provided by the separately namespaced 6.7.5 build on those images.
+
 **Headless** describes the absence of a physical or host-window display. It does
 not mean that there is no graphical session. The desktop can still render into an
 off-screen display and run applications.
@@ -181,9 +192,8 @@ host device permissions. `/etc/plasma/gpu.json` records the probed devices and
 renderers; KWin support information records the compositor's final selection.
 
 Host display compatibility still governs which GPU can present its buffers; a
-vendor name alone is not a performance ranking. GPU discovery does not replace
-the X11 profiles' Xvfb/Xephyr/shared-memory Xwayland paths. In particular, Xephyr
-does not provide the same accelerated client GLX path as the host X server.
+vendor name alone is not a performance ranking. Inspect KWin's renderer rather
+than inferring acceleration from the selected backend or a device node.
 
 KWin's screencast API supports OpenGL compositing and rejects QPainter capture.
 For Wayland VNC/web without a GPU, the conditional
@@ -198,11 +208,17 @@ X server time. Fast Shift/Ctrl chords otherwise lose transitions in this nested
 path. The library forwards to the real `XTestFakeKeyEvent` through `RTLD_NEXT`;
 it does not intercept pointer input or frame delivery.
 
-This preserves Wayland applications without requiring GPU-only capture. Local
-headless/nested sessions continue using their normal display paths.
-On current Arch, software capture stays on the OpenGL/PipeWire path using CPU
-rendering and the kernel DMA-buffer device; the private Xvfb path applies to the
-older KWin versions in Fedora, Debian and Ubuntu.
+This preserves Wayland applications without requiring GPU-only capture. Nested
+QPainter sessions on a Wayland host use the same private Xvfb capture, with a
+lossless authenticated viewer on a separate rootful Xwayland display. This avoids
+the legacy direct-nesting case where Chromium is logically active but its pixels
+fail to appear. The compositor remains on QPainter; the inner Wayland application
+and input checks are unchanged. The relay listens only on IPv4 loopback, has
+private authentication files, and publishes no host port. Other legacy nested
+paths retain their direct backend.
+Fedora, Arch and the private kiosk stack use the modern OpenGL/PipeWire path for
+software capture. The private Xvfb path applies to an active older distro
+compositor, such as Debian 13's full desktop.
 
 The performance suite's `--no-gpu` option masks `/dev/dri` with an empty tmpfs.
 Rootless Podman imports host devices after tmpfs mounts in privileged mode, so its

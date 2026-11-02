@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -397,6 +398,139 @@ else:
     client.screenshot().save(case / "05-chromium-image-pasted.png")
 
 
+def wait_dolphin(runtime, inner, config, case):
+    # Detached exec acknowledges process launch, not its active application window.
+    tag = "CLIPBOARD_DOLPHIN_" + uuid.uuid4().hex
+    script = "/run/plasma/" + tag + ".js"
+    body = """function snapshot() {
+    const w = workspace.activeWindow;
+    console.warn(TAG + ' ' + JSON.stringify(w ? {
+        pid:w.pid, normal:w.normalWindow, active:w.active,
+        minimized:w.minimized, hidden:w.hidden,
+        frame:{x:w.frameGeometry.x,y:w.frameGeometry.y,
+               width:w.frameGeometry.width,height:w.frameGeometry.height}
+    } : null));
+}
+function watch(w) {
+    w.frameGeometryChanged.connect(snapshot);
+    w.minimizedChanged.connect(snapshot);
+    w.hiddenChanged.connect(snapshot);
+}
+workspace.stackingOrder.forEach(watch);
+workspace.windowAdded.connect(function(w) { watch(w); snapshot(); });
+workspace.windowActivated.connect(snapshot);
+snapshot();
+""".replace("TAG", json.dumps(tag))
+
+    def command(*arguments):
+        result = run(runtime, "exec", inner, *arguments, timeout=5)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    def dbus(*arguments):
+        result = run(
+            runtime,
+            "exec",
+            "--user=plasma",
+            inner,
+            "env",
+            *display_environment(config),
+            "QT_QPA_PLATFORM=offscreen",
+            "qdbus-qt6",
+            "org.kde.KWin",
+            *arguments,
+            timeout=5,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    command(
+        "python3",
+        "-c",
+        "from pathlib import Path; import sys; Path(sys.argv[1]).write_text(sys.argv[2])",
+        script,
+        body,
+    )
+    deadline = time.monotonic() + 20
+    try:
+        identifier = int(dbus("/Scripting", "loadScript", script, tag).strip())
+        assert identifier >= 0, "Dolphin readiness script failed to load"
+        dbus(f"/Scripting/Script{identifier}", "run")
+        while True:
+            journal = run(
+                runtime,
+                "exec",
+                inner,
+                "journalctl",
+                "-u",
+                "plasma-session.service",
+                "--no-pager",
+                "-o",
+                "cat",
+                "-g",
+                tag,
+                timeout=5,
+            )
+            assert journal.returncode == 0 or (
+                journal.returncode == 1 and not journal.stdout and not journal.stderr
+            ), journal.stderr
+            lines = [
+                line.split(tag + " ", 1)[1]
+                for line in journal.stdout.splitlines()
+                if tag + " " in line
+            ]
+            window = json.loads(lines[-1]) if lines else None
+            if (
+                window
+                and window["normal"] is True
+                and window["active"] is True
+                and window["minimized"] is False
+                and window["hidden"] is False
+                and window["frame"]["width"] > 0
+                and window["frame"]["height"] > 0
+                and type(window["pid"]) is int
+                and window["pid"] > 0
+            ):
+                process = run(
+                    runtime,
+                    "exec",
+                    inner,
+                    "python3",
+                    "-c",
+                    "from pathlib import Path; import json,sys; p=Path('/proc')/sys.argv[1]; "
+                    "print(json.dumps({'argv':p.joinpath('cmdline').read_bytes().decode().split(chr(0))[:-1],"
+                    "'state':p.joinpath('stat').read_text().rsplit(')',1)[1].split()[0]}))",
+                    str(window["pid"]),
+                    timeout=5,
+                )
+                if process.returncode == 0:
+                    identity = json.loads(process.stdout)
+                    argv = identity["argv"]
+                    if (
+                        identity["state"] != "Z"
+                        and argv
+                        and Path(argv[0]).name == "dolphin"
+                        and "--new-window" in argv
+                        and "/e2e-images/dolphin" in argv
+                    ):
+                        (case / "dolphin-ready.json").write_text(
+                            json.dumps(
+                                {"window": window, "process": identity}, indent=2
+                            )
+                            + "\n"
+                        )
+                        return
+            assert time.monotonic() < deadline, (
+                f"Dolphin did not become the active application window: {window}"
+            )
+            time.sleep(0.1)
+    finally:
+        try:
+            dbus("/Scripting", "unloadScript", tag)
+        finally:
+            command("rm", "-f", script)
+
+
 def dolphin_image_check(runtime, inner, config, case, client, host_probe, inner_probe):
     # Close only our image-bearing apps; host Alt+F4 can close nested KWin.
     stopped = run(
@@ -462,7 +596,7 @@ else:
         "/e2e-images/dolphin",
     )
     assert result.returncode == 0, result.stderr
-    time.sleep(2)
+    wait_dolphin(runtime, inner, config, case)
     client.click(client.width // 2, client.height // 2)
     # Copy after app startup/cleanup so a previous selection owner cannot race
     # this paste; restored history can still include the retired ownership MIME.
@@ -580,7 +714,7 @@ def main():
     )
     options = parser.parse_args()
     runtime = options.runtime
-    supported = available_backends(runtime, options.image)
+    supported = available_backends(runtime, options.image, kiosk=options.kiosk)
     backends = options.backends or supported
     host_image = options.host_image or options.image
     hosts = options.host_backends or ("wayland", "x11")
@@ -690,7 +824,8 @@ def main():
                         "HOST_XAUTHORITY=/run/host/Xauthority",
                     ]
                 private_capture = backend == "x11" and host == "wayland"
-                capture_options = ["-p", "127.0.0.1::5900"] if private_capture else []
+                # The presenter's private relay already uses loopback port 5900.
+                capture_options = ["-p", "127.0.0.1::5901"] if private_capture else []
                 # Explicit mounts point at this test's desktop, excluding the real host.
                 launch_checked(
                     case,
@@ -709,13 +844,33 @@ def main():
                     f"type=bind,source={case / 'images'},target=/e2e-images",
                     "--mount",
                     f"type=bind,source={Path(__file__).with_name('clipboard-browser.py')},target=/e2e-clipboard-browser.py,readonly",
-                    HOST_DISPLAY_BACKEND="wayland",
+                    HOST_DISPLAY_BACKEND=host,
                     WAYLAND_DISPLAY="/nonexistent-clipboard-test-socket",
                     TARGET_APP="plasma-ui-fixture /e2e-output/typed.txt"
                     if options.kiosk
                     else "",
                 )
                 config = configuration(runtime, inner)
+                if config.get("PLASMA_SOFTWARE_NESTED") == "1":
+                    listeners = run(
+                        runtime,
+                        "exec",
+                        inner,
+                        "python3",
+                        "-c",
+                        "import json; from pathlib import Path; "
+                        "rows=[line.split() for name in ('tcp','tcp6') for line in Path('/proc/net',name).read_text().splitlines()[1:]]; "
+                        "print(json.dumps([row[1].upper() for row in rows if row[3]=='0A' and row[1].split(':')[1].upper()=='170C']))",
+                    )
+                    (case / "software-relay-listeners.json").write_text(
+                        listeners.stdout
+                    )
+                    assert listeners.returncode == 0, listeners.stderr
+                    assert json.loads(listeners.stdout) == ["0100007F:170C"], (
+                        listeners.stdout
+                    )
+                    assert not run(runtime, "port", inner, "5900/tcp").stdout.strip()
+                    report["checks"]["software-relay-is-loopback-only"] = True
                 for name in (outer, inner):
                     run(runtime, "exec", name, "pkill", "-x", "plasma-welcome")
                 assert config["CLIPBOARD_SYNC"] == "1", config
@@ -779,7 +934,7 @@ def main():
                         "-auth",
                         config["XAUTHORITY"],
                         "-rfbport",
-                        "5900",
+                        "5901",
                         "-passwd",
                         "testpass",
                         "-forever",
@@ -796,7 +951,12 @@ def main():
                 )
                 if not private_capture:
                     client = parent_client
-                address = run(runtime, "port", capture, "5900/tcp").stdout.strip()
+                address = run(
+                    runtime,
+                    "port",
+                    capture,
+                    "5901/tcp" if private_capture else "5900/tcp",
+                ).stdout.strip()
                 deadline = time.monotonic() + 30
                 while client is None:
                     try:
@@ -892,6 +1052,18 @@ def main():
                     for line in renderer.stdout.splitlines()
                     if line.startswith(("Compositing Type:", "OpenGL renderer string:"))
                 ]
+                if options.no_gpu:
+                    assert any(
+                        name in "\n".join(report["renderer"]).lower()
+                        for name in (
+                            "qpainter",
+                            "llvmpipe",
+                            "softpipe",
+                            "swrast",
+                            "swiftshader",
+                        )
+                    ), report["renderer"]
+                    report["checks"]["software-renderer"] = True
                 health = run(runtime, "exec", inner, "plasma-healthcheck")
                 assert health.returncode == 0, health.stdout + health.stderr
                 report["checks"]["healthy-after-clipboard-actions"] = True

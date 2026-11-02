@@ -9,6 +9,6 @@ Type=exec
 User=plasma
 EnvironmentFile=/etc/plasma/session.env
 ExecStart=/usr/local/libexec/plasma-session
-Restart=on-failure
+Restart=always
 RestartSec=3
 TimeoutStopSec=20

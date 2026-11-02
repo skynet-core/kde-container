@@ -493,8 +493,10 @@ podman build -f Dockerfile.fedora-44 --format docker --layers --target ui-test -
 uv run test/kiosk.py --runtime podman --image plasma6:ui-test
 ```
 
-The normal matrix contains both apps on all supported display profiles (eight on
-Fedora/Debian/Ubuntu, four Wayland profiles on Arch). Use
+The kiosk matrix contains both apps on all eight display profiles on every
+distribution, independently of whether its packages still provide a full X11
+desktop session. Full-desktop tests probe that separate capability and retain
+an explicit expected-rejection result when it is absent. Use
 `--modes headless vnc web` on a host without a display socket. Local-mode cases
 check the selected application, one KWin instance and absence of the full Plasma
 session. Remote cases also inspect fullscreen screenshots and send real RFB input.

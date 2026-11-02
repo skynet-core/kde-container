@@ -17,10 +17,10 @@ supported. The commands below run containers directly, without a host launcher.
 
 | Dockerfile | Systemd base tag | Desktop backends |
 | --- | --- | --- |
-| `Dockerfile.fedora-44` | `fedora-44` | Wayland and X11 |
+| `Dockerfile.fedora-44` | `fedora-44` | Wayland desktop; Wayland and X11 kiosk |
 | `Dockerfile.debian-13` | `debian-13` | Wayland and X11 |
 | `Dockerfile.ubuntu-26.04` | `ubuntu-26.04` | Wayland and X11 |
-| `Dockerfile.archlinux` | `archlinux` | Wayland only; current rolling Arch has removed the Plasma X11 session |
+| `Dockerfile.archlinux` | `archlinux` | Wayland desktop; Wayland and X11 kiosk |
 
 Each base is `ghcr.io/skynet-core/systemd:<tag>`. All variants share the same init
 modules, services, GPU preference, remote input fixes and optional kiosk session.
@@ -80,6 +80,13 @@ packages and a dedicated Python environment for checksum-pinned websockify.
 Debian's older KWin streams its existing virtual monitor through PipeWire;
 newer releases create the additional `Virtual-Plasma` monitor. Both support GPU
 rendering and automatic software fallback.
+
+Kiosk sessions on Debian and Ubuntu use the checksum-pinned, isolated KWin 6.8.2
+stack by default. Full Plasma sessions retain their distro compositor and Qt
+libraries. `--build-arg KWIN_VARIANT=distro` omits that optional kiosk stack.
+See [the private compositor build](build/KWIN.md) for source pins and ABI
+boundaries. Fedora and Arch build KWin-X11 6.7.5 for X11 kiosks without replacing
+the distro Wayland compositor.
 
 ### GitHub Actions and GHCR
 
@@ -161,9 +168,12 @@ for package phases, caching and the publication flow.
 | `x11` | `vnc` | `plasma-x11-vnc.target` | Xvfb, KWin X11 and x11vnc |
 | `x11` | `web` | `plasma-x11-web.target` | X11 VNC services plus noVNC/websockify |
 
-With `TARGET_APP` unset, all modes start a full Plasma session and private session bus. Headless and nested
-modes start no remote listener. Set `DISPLAY_BACKEND=x11` in any command below for
-its X11 variant on Fedora, Debian or Ubuntu; Arch supports the four Wayland rows.
+With `TARGET_APP` unset, all modes start a full Plasma session and private session bus.
+Nested presentation can use an authenticated loopback relay inside the container;
+its port is not published. Headless mode starts no remote listener.
+Set `DISPLAY_BACKEND=x11` in any command below for
+its full desktop X11 variant on Debian or Ubuntu. Fedora and Arch support the
+four Wayland desktop rows and both kiosk backends.
 The per-distribution examples spell out each supported backend.
 Arch includes Xwayland for legacy applications within its Wayland session.
 
@@ -172,8 +182,13 @@ with neither it selects Wayland. Docker and Podman cannot mount host sockets fro
 inside the container, so nested mode needs the mounts shown below. If both host
 socket types are mounted, Wayland has priority. Host transport and desktop backend
 are independent: either desktop backend can nest on either host display.
-On Arch, `auto` always chooses a Wayland desktop, including when nesting through
-an X11 host socket. An explicit `DISPLAY_BACKEND=x11` fails with a clear message.
+Fedora's current Plasma 6.8 packages obsolete the older `plasma-workspace-x11`
+session package, and Arch no longer ships that session. Ordinary desktops on
+those images support Wayland, including nesting on an X11 host. Explicit
+`DISPLAY_BACKEND=x11` without `TARGET_APP` fails with a clear message. Kiosk
+sessions require only the separately built `kwin_x11`, and support both backends
+on all four distros. Tests exercise both the unsupported desktop rejection and
+the supported X11 kiosk path.
 
 ## Before running the examples
 
@@ -197,7 +212,8 @@ chmod 600 ./vnc-password
 
 Connect a VNC viewer to `127.0.0.1:5900`, or open
 `http://127.0.0.1:6080/vnc.html` for web/kiosk mode and enter this password.
-Headless and nested modes need no password and start no remote listener.
+Headless and nested modes need no caller-supplied password. A nested relay generates
+its own private authentication files and listens only inside the container.
 
 ### Host socket for nested mode
 
@@ -232,8 +248,8 @@ desktop user must also have host permission to open them.
 Set `TARGET_APP` to run one fullscreen application under KWin instead of starting
 the Plasma desktop, panels, splash screen and desktop autostart programs. Leave
 it unset or empty to retain the normal KDE Plasma session. This works with every
-supported profile: eight on Fedora/Debian/Ubuntu and four Wayland profiles on
-Arch, including GPU rendering and software fallback.
+supported profile: eight on each distribution, including both display backends,
+GPU rendering and software fallback.
 
 Production images include Konsole and Dolphin; use `TARGET_APP=konsole` to try
 kiosk mode with an installed application. Chromium is available only in the
@@ -272,10 +288,10 @@ first, then expand the engine you use.
 
 | Distribution | Local image used below | Desktop profiles |
 | --- | --- | --- |
-| [Fedora 44](#fedora-44) | `plasma6:fedora-44` | Wayland and X11: nested, headless, VNC, web |
+| [Fedora 44](#fedora-44) | `plasma6:fedora-44` | Wayland desktop; both kiosk backends: nested, headless, VNC, web |
 | [Debian 13](#debian-13) | `plasma6:debian-13` | Wayland and X11: nested, headless, VNC, web |
 | [Ubuntu 26.04](#ubuntu-2604) | `plasma6:ubuntu-26.04` | Wayland and X11: nested, headless, VNC, web |
-| [Arch Linux](#arch-linux) | `plasma6:archlinux` | Wayland: nested, headless, VNC, web |
+| [Arch Linux](#arch-linux) | `plasma6:archlinux` | Wayland desktop; both kiosk backends: nested, headless, VNC, web |
 
 ### Fedora 44
 
@@ -343,66 +359,10 @@ docker run -d --rm --name plasma6-web \
   -p 127.0.0.1:6080:6080 plasma6:fedora-44
 ```
 
-**X11 headless**
+**X11 kiosk sessions**
 
-```bash
-docker run -d --rm --name plasma6-x11-headless \
-  --privileged --user=0:0 --userns=host --cgroupns=private \
-  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=headless plasma6:fedora-44
-```
-
-**X11 nested on a Wayland host**
-
-```bash
-docker run -d --rm --name plasma6-x11-on-wayland \
-  --privileged --user=0:0 --userns=host --cgroupns=private \
-  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
-  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:fedora-44
-```
-
-**X11 nested on an X11 host**
-
-```bash
-docker run -d --rm --name plasma6-x11-nested \
-  --privileged --user=0:0 --userns=host --cgroupns=private \
-  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
-  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
-  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:fedora-44
-```
-
-**X11 VNC**
-
-```bash
-docker run -d --rm --name plasma6-x11-vnc \
-  --privileged --user=0:0 --userns=host --cgroupns=private \
-  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
-  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=vnc \
-  -p 127.0.0.1:5900:5900 plasma6:fedora-44
-```
-
-**X11 browser / noVNC**
-
-```bash
-docker run -d --rm --name plasma6-x11-web \
-  --privileged --user=0:0 --userns=host --cgroupns=private \
-  --pids-limit=8192 --shm-size=512m --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
-  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
-  -p 127.0.0.1:6080:6080 plasma6:fedora-44
-```
+Current Fedora packages no longer provide a full Plasma X11 session. The
+separately built X11 compositor supports the `TARGET_APP` kiosk examples below.
 
 **Chromium kiosk: Wayland, browser / noVNC**
 
@@ -507,71 +467,10 @@ podman run -d --rm --name plasma6-web \
   -p 127.0.0.1:6080:6080 plasma6:fedora-44
 ```
 
-**X11 headless**
+**X11 kiosk sessions**
 
-```bash
-podman run -d --rm --name plasma6-x11-headless \
-  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
-  --cgroupns=private --pids-limit=8192 --shm-size=512m \
-  --tmpfs /run --tmpfs /tmp:mode=1777 \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=headless plasma6:fedora-44
-```
-
-**X11 nested on a Wayland host**
-
-```bash
-podman run -d --rm --name plasma6-x11-on-wayland \
-  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
-  --cgroupns=private --pids-limit=8192 --shm-size=512m \
-  --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount "type=bind,source=$HOST_WAYLAND_SOCKET,target=/run/host/wayland,readonly" \
-  -e HOST_WAYLAND_DISPLAY=/run/host/wayland \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:fedora-44
-```
-
-**X11 nested on an X11 host**
-
-```bash
-podman run -d --rm --name plasma6-x11-nested \
-  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
-  --cgroupns=private --pids-limit=8192 --shm-size=512m \
-  --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount type=bind,source=/tmp/.X11-unix,target=/run/host/X11,readonly \
-  --mount "type=bind,source=${XAUTHORITY:-$HOME/.Xauthority},target=/run/host/Xauthority,readonly" \
-  -e HOST_DISPLAY="$DISPLAY" -e HOST_XAUTHORITY=/run/host/Xauthority \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=nested plasma6:fedora-44
-```
-
-**X11 VNC**
-
-```bash
-podman run -d --rm --name plasma6-x11-vnc \
-  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
-  --cgroupns=private --pids-limit=8192 --shm-size=512m \
-  --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
-  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=vnc \
-  -p 127.0.0.1:5900:5900 plasma6:fedora-44
-```
-
-**X11 browser / noVNC**
-
-```bash
-podman run -d --rm --name plasma6-x11-web \
-  --privileged --systemd=always --user=0:0 --userns=keep-id --passwd=false \
-  --cgroupns=private --pids-limit=8192 --shm-size=512m \
-  --tmpfs /run --tmpfs /tmp:mode=1777 \
-  --mount "type=bind,source=$PWD/vnc-password,target=/run/secrets/vnc-password,readonly" \
-  -e VNC_PASSWORD_FILE=/run/secrets/vnc-password \
-  -e PLASMA_UID="$(id -u)" -e PLASMA_GID="$(id -g)" \
-  -e DISPLAY_BACKEND=x11 -e DISPLAY_MODE=web \
-  -p 127.0.0.1:6080:6080 plasma6:fedora-44
-```
+Current Fedora packages no longer provide a full Plasma X11 session. The
+separately built X11 compositor supports the `TARGET_APP` kiosk examples below.
 
 **Chromium kiosk: Wayland, browser / noVNC**
 
@@ -1570,7 +1469,8 @@ Podman, root remains limited to its user namespace.
 | --- | --- | --- |
 | `DISPLAY_MODE` | `headless` | `headless`, `nested`, `vnc`, `web` |
 | `DISPLAY_BACKEND` | `auto` | `auto`, `wayland`, `x11` |
-| `TARGET_APP` | unset | Optional executable and quoted arguments; selects a fullscreen application session |
+| `TARGET_APP` | unset | Optional executable and quoted arguments; selects a single-application session |
+| `TARGET_APP_WINDOW_MODE` | `fullscreen` | `fullscreen` or borderless `maximized`, applied only to normal kiosk windows; dialogs keep their normal geometry |
 | `DISPLAY_WIDTH`, `DISPLAY_HEIGHT` | `1920`, `1080` | Initial dimensions, 10–9999 pixels |
 | `PLASMA_UID`, `PLASMA_GID` | image account IDs | Optional runtime desktop identity |
 | `PLASMA_PASSWORD` | unset | Set the Linux account password; unset preserves it |
@@ -1584,7 +1484,7 @@ Podman, root remains limited to its user namespace.
 | `VNC_PASSWORD` | unset | Password when no file is provided |
 | `VNC_MAX_FPS` | `60` | Remote update rate, 1–60; lower it to reduce CPU/network use |
 | `CLIPBOARD_SYNC` | `1` | Share clipboard and primary selection in nested mode; set `0` to disable |
-| `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility,graphics,display` | NVIDIA toolkit capabilities requested before init; GPU devices still require `--gpus` |
+| `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility,graphics,display` | Direct engine commands require GPU injection; `plasma6-run` requests NVIDIA automatically when available and preserves explicit runtime/device/software choices |
 | `LIBGL_ALWAYS_SOFTWARE` | `0` | Prefer an accessible GPU; software fallback remains available |
 | `SYSTEMD_MASKED` | `NetworkManager.service` | Base init framework disables and masks these units before boot; comma/space-separated list |
 | `INIT_LOG_LEVEL` | inherited (`2`) | Base framework logging level |
@@ -1669,7 +1569,19 @@ that parent display. Applications and the Plasma session still use Wayland.
 The software helper preserves raw modifier key events and loads a scoped XTest
 compatibility library that spaces keyboard edges by at least 5 ms, preserving rapid
 Shift/Ctrl combinations through KWin's nested input backend.
-Headless and nested modes use their normal backends with software rendering.
+Modern OpenGL KWin sessions use a private, lossless presentation relay in nested
+mode on both Wayland and X11 hosts. This supports older Wayland parents missing
+protocols required by KWin 6.8 and X11 parents without usable DRI3. The compositor
+keeps its selected GPU or software renderer; the relay changes presentation and
+adds local capture/encoding work. Its VNC listener stays on container loopback
+and is not published. Software QPainter sessions on a Wayland host use a private
+Xvfb backing and a separate viewer display; other older nested paths remain direct.
+
+The internal `PLASMA_SOFTWARE_NESTED` flag identifies this presentation relay;
+its name does not indicate the renderer. Check `LIBGL_ALWAYS_SOFTWARE`, the
+selected GPU in `/etc/plasma/gpu.json` and KWin's renderer information to verify
+which renderer is active. The X11 presenter uses explicit Unix transport to avoid
+SysV shared-memory collisions with a host X server in a different IPC namespace.
 
 For NVIDIA, use a host with the NVIDIA Container Toolkit and add `--gpus all`
 to the Docker command. Images default
@@ -1692,11 +1604,12 @@ application environment before Xwayland or session applications start.
 For buffer formats, fences, video-capture limitations and diagnostic commands,
 see [the graphics debugging guide](docs/06-graphics-debugging.md).
 
-On the tested NVIDIA 615.78.08 driver, Debian 13's KWin 6.3.6 has a separate
-virtual-output framebuffer failure in Wayland VNC/web mode. It also occurs in
-the image before the nested synchronization fix. NVIDIA nested mode passes on
-Debian; use the Fedora, Ubuntu or Arch image for the validated NVIDIA remote
-path. Debian remote mode was validated with AMD/Mesa.
+Debian 13's distro KWin 6.3 has a separate NVIDIA virtual-output failure in
+Wayland VNC/web mode. Its ordinary Plasma desktop and the optional distro kiosk
+variant retain the software-capture workaround. The default private KWin 6.8.2
+kiosk variant keeps the selected GPU for remote capture. The workaround follows
+the active compositor; merely installing the private stack does not change a
+full desktop's KWin or KScreen environment.
 
 ```bash
 # NVIDIA: Wayland Plasma inside the host X11/Xwayland window.
@@ -1734,15 +1647,18 @@ podman run -d --rm --name plasma6-nvidia-nested \
 
 The GPU checks describe usable devices. The actual compositor renderer also
 depends on its display backend; inspect KWin's support information. The X11
-profiles retain their Xvfb/Xephyr/shared-memory Xwayland display paths.
+profiles use a private NVIDIA Xorg virtual screen when selected hardware is
+available; software sessions retain their Xvfb/Xephyr/Xwayland paths. Nested
+hardware desktops are presented through an authenticated loopback viewer on
+the requested host transport, without taking over the host's virtual terminal.
 
 `LIBGL_ALWAYS_SOFTWARE=1` explicitly selects the software path; the default `0`
 means prefer GPU and select software if no hardware context can be created.
 
-Current Arch uses Mesa software OpenGL and PipeWire instead: KWin 6.8 removed
-QPainter. This requires the host's `/dev/udmabuf` device, which exports CPU memory
-as DMA buffers without requiring a GPU. Prepare it before starting an Arch
-container on a machine without a GPU:
+Fedora, Arch and the private kiosk stack use Mesa software OpenGL and PipeWire
+because KWin 6.8 removed QPainter. This requires the host's `/dev/udmabuf` device,
+which exports CPU memory as DMA buffers without requiring a GPU. Prepare it
+before starting a software OpenGL container:
 
 ```bash
 # HOST: load the kernel driver if /dev/udmabuf is absent.
@@ -1783,44 +1699,35 @@ for example `http://127.0.0.1:6080/vnc.html?quality=6&compression=1`.
 
 ## Linting
 
-Run the complete source checks with:
+The complete source check runs host linters and the compiler checks in a matching
+native SDK. Build that test-only image from the maintained Fedora stages:
 
 ```bash
-./test/lint.sh
+mkdir -p test/.artifacts/native
+cat Dockerfile.fedora-44 test/native/Dockerfile.fragment > test/.artifacts/native/Dockerfile
+docker build --target native-tests -f test/.artifacts/native/Dockerfile -t plasma6:native-tests .
+NATIVE_TEST_IMAGE=plasma6:native-tests ./test/lint.sh
 ```
 
-Install ShellCheck, Ruff, Hadolint, actionlint, clang-format, clangd, clang-tidy,
-`xmllint`, Git and ripgrep on the host. The native checks also need CMake, a C/C++
-compiler, Qt 6 Widgets, KF6 CoreAddons, Wayland development tools, LibVNCServer,
-xkbcommon and the KRFB private library. The distribution-specific development
-package lists are in `build/packages/*/input-build.txt`; install `krfb` as well.
-The Wayland development tools supply `/usr/share/wayland/wayland.dtd` for XML
-validation.
+Install ShellCheck, Ruff, Hadolint, actionlint, clang-format, `xmllint`, Git and
+ripgrep on the host. The Wayland development tools supply
+`/usr/share/wayland/wayland.dtd` for XML validation. The native SDK includes
+clangd, clang-tidy, the matching Qt/KRFB/KPipeWire/TigerVNC headers and the merged
+compilation database for production code and every native regression source.
+No test binaries or SDK dependencies enter the production image.
 
-Configure and build the native code once before linting. KRFB's public package
-does not include the private plugin headers, so download the same verified source
-archive used by the Dockerfiles:
+`NATIVE_TEST_IMAGE` mode compares the host's relevant source hashes with the SDK
+before compiler checks run, and fails if the image is stale. Rebuild it after
+changing native, compatibility, patch or test inputs. The
+[native regression guide](test/native/README.md) describes the SDK, CTest and
+compiler-lint commands and retained evidence.
 
-```bash
-mkdir -p test/.artifacts/lint/krfb-source
-curl --fail --location --retry 3 \
-  https://codeload.github.com/KDE/krfb/tar.gz/refs/tags/v26.08.2 \
-  --output test/.artifacts/lint/krfb.tar.gz
-printf '%s  %s\n' \
-  4f613500a2308f5b16b109ee4f113a69ea597cd03bdb19f8b6abd16ab914593e \
-  test/.artifacts/lint/krfb.tar.gz | sha256sum --check -
-tar -xzf test/.artifacts/lint/krfb.tar.gz --strip-components=1 \
-  -C test/.artifacts/lint/krfb-source
-cmake -S native -B build \
-  -DKRFB_SOURCE_DIR="$PWD/test/.artifacts/lint/krfb-source"
-cmake --build build --parallel
-./test/lint.sh
-```
-
-CMake exports `build/compile_commands.json`; `.clangd` uses it for the same include
-paths and compiler flags in the editor. Rebuild after changing the native code or
-Wayland XML. If KRFB's private library is outside the normal library search paths,
-add `-DKRFB_PRIVATE=/absolute/path/to/libkrfbprivate.so.5` to the configure command.
+A fully configured host toolchain can instead run `./test/lint.sh` without
+`NATIVE_TEST_IMAGE`. It must provide the same private dependencies and a complete
+`build/compile_commands.json` covering every selected C++ source, including
+`test/native/` and the actual TigerVNC/KRFB test targets. Configuring only
+production `native/` is insufficient; unconfigured files fail rather than using
+fallback compiler flags.
 
 The checks cover shell scripts, Python scripts (including executable files without
 `.py` suffixes), Dockerfiles, GitHub Actions, C++ formatting and diagnostics,
@@ -1834,7 +1741,7 @@ root systemd Dockerfile policy have individual comments explaining their scope.
 Run the host regression checks without building an image:
 
 ```bash
-python3 test/unit.py
+uv run test/unit.py
 ```
 
 These check launcher namespaces, nested socket mounts, test isolation, readiness
@@ -1864,7 +1771,8 @@ RUNTIME=podman IMAGE_TAG=plasma6:archlinux bash test/test.sh --capture
 
 On a host without a graphical session, append `--skip-nested` to the boot
 commands. For kiosk tests below, append `--modes headless vnc web`. The suites
-detect Arch's Wayland-only support automatically.
+detect ordinary desktop and kiosk capabilities separately, including expected
+rejection of a full X11 desktop where its session launcher is absent.
 
 The `ui-test` target adds Chromium, a Qt editor and benchmark to the runtime image.
 These applications are excluded from the published production target. `uv`

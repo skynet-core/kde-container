@@ -1,7 +1,12 @@
-"""Host-only regressions for shared test setup and kiosk process cleanup."""
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pycryptodome>=3.20,<4", "pillow>=11,<13", "websocket-client>=1.8,<2"]
+# ///
+"""Host regressions for the real launcher, graphics policy and protocol boundaries."""
 
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import pwd
@@ -16,44 +21,154 @@ from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock, call, mock_open, patch
 
+import integration
 import support
 
 
 class SupportTests(unittest.TestCase):
+    def health_commands(self, environment, failed_command=None):
+        commands = []
+
+        def execute(command, **_settings):
+            commands.append(command)
+            if command == failed_command:
+                raise subprocess.CalledProcessError(3, command)
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            patch(
+                "builtins.open",
+                mock_open(
+                    read_data="".join(
+                        f'{key}="{value}"\n' for key, value in environment.items()
+                    )
+                ),
+            ),
+            patch("pwd.getpwnam", return_value=pwd.getpwuid(os.getuid())),
+            patch("subprocess.run", side_effect=execute),
+        ):
+            runpy.run_path(str(support.ROOT / "bin/plasma-healthcheck"))
+        return commands
+
+    def test_both_nested_relays_require_every_service_and_capture_probe(self):
+        for backend, flag in (
+            ("wayland", "PLASMA_SOFTWARE_NESTED"),
+            ("x11", "PLASMA_NVIDIA_NESTED"),
+        ):
+            environment = {
+                "DISPLAY_BACKEND": backend,
+                "DISPLAY_MODE": "nested",
+                flag: "1",
+                "CLIPBOARD_SYNC": "1",
+            }
+            required = [
+                ["systemctl", "is-active", "--quiet", unit]
+                for unit in (
+                    f"plasma-{backend}-nested.target",
+                    "plasma-session.service",
+                    "plasma-clipboard.service",
+                    "plasma-nested-x11.service",
+                    "plasma-vnc.service",
+                )
+            ] + [
+                ["/usr/local/libexec/plasma-remote-output", "--check"],
+                ["/usr/local/libexec/plasma-wait", "desktop"],
+                ["/usr/local/libexec/plasma-wait", "vnc"],
+            ]
+            with self.subTest(backend=backend, failed=None):
+                self.assertCountEqual(self.health_commands(environment), required)
+            for failed in required:
+                with (
+                    self.subTest(backend=backend, failed=failed),
+                    self.assertRaises(subprocess.CalledProcessError),
+                ):
+                    self.health_commands(environment, failed)
+
+    def test_native_nesting_does_not_require_a_private_relay(self):
+        for backend in ("wayland", "x11"):
+            with self.subTest(backend=backend):
+                commands = self.health_commands(
+                    {
+                        "DISPLAY_BACKEND": backend,
+                        "DISPLAY_MODE": "nested",
+                        "CLIPBOARD_SYNC": "1",
+                        "PLASMA_SOFTWARE_NESTED": "0",
+                        "PLASMA_NVIDIA_NESTED": "0",
+                    }
+                )
+                self.assertCountEqual(
+                    commands,
+                    [
+                        [
+                            "systemctl",
+                            "is-active",
+                            "--quiet",
+                            f"plasma-{backend}-nested.target",
+                        ],
+                        ["systemctl", "is-active", "--quiet", "plasma-session.service"],
+                        [
+                            "systemctl",
+                            "is-active",
+                            "--quiet",
+                            "plasma-clipboard.service",
+                        ],
+                        ["/usr/local/libexec/plasma-wait", "desktop"],
+                    ],
+                )
+
+    def test_native_sdk_manifest_matches_and_rejects_stale_or_missing_inputs(self):
+        spec = importlib.util.spec_from_file_location(
+            "native_sdk_inputs", support.ROOT / "test/native/sdk-inputs.py"
+        )
+        sdk = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sdk)
+        for state in ("matching", "stale", "missing"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for name in sdk.DIRECTORIES:
+                    (root / name).mkdir(parents=True, exist_ok=True)
+                for name in sdk.FILES:
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("same input")
+                source = root / "native/test.cpp"
+                source.write_text("original")
+                expected = sdk.manifest(root)
+                if state == "stale":
+                    source.write_text("changed")
+                elif state == "missing":
+                    (root / ".clangd").unlink()
+                if state == "matching":
+                    sdk.verify(root, expected)
+                else:
+                    with self.assertRaises((ValueError, FileNotFoundError)):
+                        sdk.verify(root, expected)
+
     def test_health_requires_every_selected_unit(self):
-        for mode in ("headless", "vnc", "web"):
+        for mode in ("headless", "vnc", "web", "nested"):
             units = [f"plasma-wayland-{mode}.target", "plasma-session.service"]
-            if mode in ("vnc", "web"):
+            if mode in ("vnc", "web", "nested"):
                 units.append("plasma-vnc.service")
             if mode == "web":
                 units.append("plasma-web.service")
+            if mode == "nested":
+                units += ["plasma-clipboard.service", "plasma-nested-x11.service"]
+            environment = {"DISPLAY_BACKEND": "wayland", "DISPLAY_MODE": mode}
+            if mode == "nested":
+                environment.update(CLIPBOARD_SYNC="1", PLASMA_SOFTWARE_NESTED="1")
             for failed in (None, *units):
-
-                def execute(command, failed=failed, **settings):
-                    if command[0] == "systemctl" and not any(
-                        unit != failed for unit in command[3:]
-                    ):
-                        raise subprocess.CalledProcessError(3, command)
-                    return subprocess.CompletedProcess(command, 0)
-
                 expected = (
                     self.assertRaises(subprocess.CalledProcessError)
                     if failed
                     else nullcontext()
                 )
-                with (
-                    self.subTest(mode=mode, failed=failed),
-                    patch(
-                        "builtins.open",
-                        mock_open(
-                            read_data=f'DISPLAY_BACKEND="wayland"\nDISPLAY_MODE="{mode}"\n'
-                        ),
-                    ),
-                    patch("pwd.getpwnam", return_value=pwd.getpwuid(os.getuid())),
-                    patch("subprocess.run", side_effect=execute),
-                    expected,
-                ):
-                    runpy.run_path(str(support.ROOT / "bin/plasma-healthcheck"))
+                with self.subTest(mode=mode, failed=failed), expected:
+                    self.health_commands(
+                        environment,
+                        ["systemctl", "is-active", "--quiet", failed]
+                        if failed
+                        else None,
+                    )
 
     def test_run_preserves_failure_output(self):
         result = support.run(
@@ -75,6 +190,94 @@ class SupportTests(unittest.TestCase):
                 self.assertEqual(
                     support.available_backends("docker", "image"), expected
                 )
+
+    def test_kiosk_and_full_desktop_require_different_x11_capabilities(self):
+        for kiosk in (False, True):
+            with (
+                self.subTest(kiosk=kiosk),
+                patch.object(
+                    support, "run", return_value=subprocess.CompletedProcess([], 0)
+                ) as run,
+            ):
+                self.assertEqual(
+                    support.available_backends("docker", "image", kiosk=kiosk),
+                    ("wayland", "x11"),
+                )
+                probe = run.call_args.args[-1]
+                self.assertIn("command -v kwin_x11", probe)
+                self.assertEqual("command -v startplasma-x11" in probe, not kiosk)
+
+    def test_software_integration_rejects_conflicting_hardware_expectations(self):
+        for arguments in (("--gpus", "all"), ("--expect-renderer", "gpu")):
+            with (
+                self.subTest(arguments=arguments),
+                patch.object(sys, "argv", ["integration.py", "--no-gpu", *arguments]),
+                patch("sys.stderr", new=io.StringIO()),
+                self.assertRaises(SystemExit) as error,
+            ):
+                integration.main()
+            self.assertEqual(error.exception.code, 2)
+
+    def test_unavailable_full_desktop_x11_requires_the_expected_container_rejection(
+        self,
+    ):
+        for exited, message, accepted in (
+            (
+                "1",
+                "This image has no usable KWin X11 session; use DISPLAY_BACKEND=wayland",
+                True,
+            ),
+            ("0", "This image has no usable KWin X11 session", False),
+            ("1", "Unrelated startup error", False),
+        ):
+            with (
+                self.subTest(exited=exited, message=message),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+
+                def command(
+                    _runtime,
+                    action,
+                    *_arguments,
+                    _exited=exited,
+                    _message=message,
+                    **_settings,
+                ):
+                    return subprocess.CompletedProcess(
+                        [],
+                        0,
+                        _exited
+                        if action == "wait"
+                        else _message
+                        if action == "logs"
+                        else "sha256:fixture",
+                        "",
+                    )
+
+                expectation = (
+                    nullcontext() if accepted else self.assertRaises(AssertionError)
+                )
+                with (
+                    patch.object(
+                        integration,
+                        "launch",
+                        return_value=subprocess.CompletedProcess([], 0, "", ""),
+                    ),
+                    patch.object(integration, "command", side_effect=command),
+                    patch.object(integration, "collect_artifacts") as cleanup,
+                    patch("builtins.print"),
+                    expectation,
+                ):
+                    integration.verify_unsupported_x11(
+                        "docker", "fixture", Path(directory)
+                    )
+                report = json.loads(
+                    (
+                        Path(directory) / "x11-desktop-unavailable/results.json"
+                    ).read_text()
+                )
+                self.assertEqual(report["passed"], accepted)
+                cleanup.assert_called_once()
 
     def test_launcher_modes_and_namespaces(self):
         with (
@@ -193,6 +396,8 @@ class SupportTests(unittest.TestCase):
                 docker = support.software_options("docker")
                 podman = support.software_options("podman")
                 self.assertIn("/dev/dri:mode=0755", docker)
+                self.assertIn("LIBGL_ALWAYS_SOFTWARE=1", docker)
+                self.assertIn("LIBGL_ALWAYS_SOFTWARE=1", podman)
                 self.assertNotIn("--privileged=false", docker)
                 self.assertIn("--privileged=false", podman)
                 self.assertIn("--cap-add=all", podman)
@@ -276,6 +481,76 @@ class GpuTests(unittest.TestCase):
 
 
 class KioskTests(unittest.TestCase):
+    def test_chromium_window_policy_preserves_default_and_explicit_urls(self):
+        loader = importlib.machinery.SourceFileLoader(
+            "browser_target_app", str(support.ROOT / "libexec/plasma-target-app")
+        )
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        target_app = importlib.util.module_from_spec(spec)
+        loader.exec_module(target_app)
+        handlers = {}
+        for browser in ("chromium", "chromium-browser"):
+            for mode in ("fullscreen", "maximized"):
+                for url in (None, "https://example.invalid/page"):
+                    with (
+                        self.subTest(browser=browser, mode=mode, url=url),
+                        tempfile.TemporaryDirectory() as directory,
+                    ):
+                        handlers.clear()
+                        child = Mock(pid=4321)
+                        child.poll.return_value = None
+
+                        def sleep(duration):
+                            if duration == 0.1:
+                                handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+                        with (
+                            patch.dict(
+                                os.environ,
+                                {
+                                    "DISPLAY_MODE": "headless",
+                                    "DISPLAY_BACKEND": "wayland",
+                                    "TARGET_APP_WINDOW_MODE": mode,
+                                },
+                                clear=True,
+                            ),
+                            patch.object(sys, "argv", ["plasma-target-app"]),
+                            patch.object(
+                                target_app, "STATE", Path(directory) / "state.json"
+                            ),
+                            patch.object(
+                                target_app,
+                                "command",
+                                return_value=[
+                                    "/usr/bin/" + browser,
+                                    *([url] if url else []),
+                                ],
+                            ),
+                            patch.object(target_app, "start_time", return_value="123"),
+                            patch.object(target_app.subprocess, "run"),
+                            patch.object(
+                                target_app.subprocess, "Popen", return_value=child
+                            ) as spawn,
+                            patch.object(
+                                target_app.signal,
+                                "signal",
+                                side_effect=lambda number, handler: handlers.update(
+                                    {number: handler}
+                                ),
+                            ),
+                            patch.object(target_app.os, "killpg"),
+                            patch.object(target_app.time, "sleep", side_effect=sleep),
+                        ):
+                            self.assertEqual(target_app.main(), 0)
+                            arguments = spawn.call_args.args[0]
+                            self.assertEqual(
+                                "--kiosk" in arguments, mode == "fullscreen"
+                            )
+                            self.assertEqual(arguments[-1], url or "about:blank")
+                            self.assertEqual(arguments.count(url or "about:blank"), 1)
+                            self.assertIn("--no-first-run", arguments)
+                            self.assertIn("--ozone-platform=wayland", arguments)
+
     def test_restart_and_shutdown_cleanup(self):
         loader = importlib.machinery.SourceFileLoader(
             "target_app", str(support.ROOT / "libexec/plasma-target-app")
@@ -338,6 +613,11 @@ class KioskTests(unittest.TestCase):
                         call(child.pid, signal.SIGKILL) in kill.call_args_list, force
                     )
                     self.assertFalse(target_app.STATE.exists())
+
+
+def load_tests(loader, tests, _pattern):
+    tests.addTests(loader.discover(str(Path(__file__).parent), pattern="test_*.py"))
+    return tests
 
 
 if __name__ == "__main__":

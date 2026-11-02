@@ -19,22 +19,25 @@ def run(*arguments, timeout=180, **settings):
     )
 
 
-def available_backends(runtime, image):
+def available_backends(runtime, image, *, kiosk=False):
+    probe = "command -v kwin_x11 >/dev/null"
+    if not kiosk:
+        probe += " && command -v startplasma-x11 >/dev/null"
     result = run(
         runtime,
         "run",
         "--rm",
         "--entrypoint",
-        "/usr/bin/test",
+        "/bin/sh",
         image,
-        "-x",
-        "/usr/bin/kwin_x11",
+        "-c",
+        probe,
     )
     return ("wayland", "x11") if result.returncode == 0 else ("wayland",)
 
 
 def software_options(runtime):
-    options = ["--tmpfs", "/dev/dri:mode=0755"]
+    options = ["--env", "LIBGL_ALWAYS_SOFTWARE=1", "--tmpfs", "/dev/dri:mode=0755"]
     if runtime == "podman":
         # Privileged rootless Podman imports GPU devices after mounting tmpfs.
         options += [
@@ -63,6 +66,7 @@ def launch(runtime, image, name, backend, mode, *options, **settings):
         "WEB_PORT": "0",
         "BIND_ADDRESS": "127.0.0.1",
         "TARGET_APP": "",
+        "TARGET_APP_WINDOW_MODE": "fullscreen",
         "PLASMA_UID": str(os.getuid()),
         "PLASMA_GID": str(os.getgid()),
         **settings,

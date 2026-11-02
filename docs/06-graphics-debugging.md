@@ -295,8 +295,11 @@ crash. Repeating the VNC case with the pre-fix image reproduced the same failure
 changing to OpenGL ES did not resolve it. The nested synchronization helper is
 disabled in these modes (`PLASMA_NVIDIA_SYNC=0`), so this is a separate failure.
 
-Debian NVIDIA nested sessions passed through both Wayland and X11 host sockets
-on Docker and rootless Podman. Its remote path passed with AMD/Mesa. Fedora,
-Ubuntu and Arch passed the NVIDIA remote capture checks. Use one of those
-images when NVIDIA-backed remote capture is required. A working context or a
-healthy headless service alone does not establish successful framebuffer capture.
+The distro-compositor path retains its software fallback for this failure.
+Debian and Ubuntu kiosk sessions can instead use the isolated, checksum-pinned
+[KWin 6.8.2 stack](../build/KWIN.md), keeping the selected GPU for capture. Full
+Plasma sessions continue using the distro compositor; the mere presence of the
+private stack must not select its KScreen ABI or bypass the older compositor's
+workaround. A working context or a healthy headless service alone does not
+establish successful framebuffer capture: retain actual remote frames and input
+results from the active backend.
