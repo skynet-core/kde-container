@@ -37,7 +37,8 @@ if [[ $HOST_DISPLAY_BACKEND == wayland ]]; then
 		presenter_display=$PLASMA_X11_DISPLAY
 	fi
 	if [[ $DISPLAY_BACKEND != wayland || ${PLASMA_SOFTWARE_NESTED:-0} != 1 || ${PLASMA_SOFTWARE_CAPTURE:-0} == 1 ]]; then
-		/usr/bin/Xwayland "$presenter_display" -auth /etc/plasma/Xauthority \
+		# Keep the host frontend independent of guest portal startup.
+		DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null /usr/bin/Xwayland "$presenter_display" -auth /etc/plasma/Xauthority \
 			-nolisten tcp -noreset -geometry "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}" -shm -decorate &
 	fi
 	export DISPLAY=$presenter_display XAUTHORITY=/etc/plasma/Xauthority

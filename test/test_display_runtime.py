@@ -516,6 +516,72 @@ class RenderingPolicyTests(unittest.TestCase):
         self.assertEqual(guest["program"], "startplasma-wayland")
         self.assertEqual(guest["environment"]["DBUS_SESSION_BUS_ADDRESS"], guest_bus)
 
+    def test_legacy_frontend_detaches_guest_bus_only_for_xwayland(self):
+        helper = SOURCE.parent / "plasma-nested-x11"
+        guest_bus = "unix:path=/run/plasma/bus"
+        for backend, capture, frontend in (
+            ("x11", "0", ":110"),
+            ("wayland", "1", ":100"),
+        ):
+            with self.subTest(backend=backend, capture=capture):
+                records = shell_calls(
+                    helper.read_text(),
+                    {
+                        "DISPLAY_BACKEND": backend,
+                        "DISPLAY_MODE": "nested",
+                        "PLASMA_SOFTWARE_NESTED": "1" if backend == "wayland" else "0",
+                        "PLASMA_SOFTWARE_CAPTURE": capture,
+                        "HOST_DISPLAY_BACKEND": "wayland",
+                        "HOST_WAYLAND_DISPLAY": "/private-host/wayland",
+                        "PLASMA_X11_DISPLAY": ":100",
+                        "PLASMA_SOFTWARE_DISPLAY": ":110",
+                        "DISPLAY_WIDTH": "800",
+                        "DISPLAY_HEIGHT": "600",
+                        "DBUS_SESSION_BUS_ADDRESS": guest_bus,
+                    },
+                    (
+                        "/usr/bin/Xwayland",
+                        "/usr/local/libexec/plasma-wait",
+                        "/usr/bin/vncviewer",
+                        "dbus-run-session",
+                    ),
+                )
+                calls = {row["program"]: row for row in records}
+                self.assertEqual(
+                    calls["Xwayland"]["environment"]["DBUS_SESSION_BUS_ADDRESS"],
+                    "unix:path=/dev/null",
+                )
+                self.assertEqual(
+                    calls["Xwayland"]["argv"],
+                    [
+                        frontend,
+                        "-auth",
+                        "/etc/plasma/Xauthority",
+                        "-nolisten",
+                        "tcp",
+                        "-noreset",
+                        "-geometry",
+                        "800x600",
+                        "-shm",
+                        "-decorate",
+                    ],
+                )
+                self.assertEqual(calls["plasma-wait"]["argv"], ["x11"])
+                self.assertEqual(
+                    calls["dbus-run-session"]["argv"][:3],
+                    ["--", "plasma-test", "--present"],
+                )
+                for name in ("plasma-wait", "dbus-run-session"):
+                    environment = calls[name]["environment"]
+                    self.assertEqual(environment["DBUS_SESSION_BUS_ADDRESS"], guest_bus)
+                    self.assertEqual(environment["DISPLAY"], frontend)
+                    self.assertEqual(
+                        environment["XAUTHORITY"], "/etc/plasma/Xauthority"
+                    )
+                    self.assertEqual(
+                        environment["WAYLAND_DISPLAY"], "/private-host/wayland"
+                    )
+
     def test_legacy_backing_and_frontend_use_separate_authenticated_displays(self):
         helper = SOURCE.parent / "plasma-nested-x11"
         environment = {
@@ -616,8 +682,14 @@ class RenderingPolicyTests(unittest.TestCase):
             ("1", "0", "1", "wayland"),
             ("0", "0", "1", "wayland"),
             ("0", "1", "0", "x11"),
+            ("0", "0", "0", "x11"),
         ):
-            with self.subTest(software_relay=software_relay, nvidia=nvidia):
+            with self.subTest(
+                software_relay=software_relay,
+                nvidia=nvidia,
+                capture=capture,
+                backend=backend,
+            ):
                 call = shell_calls(
                     source,
                     {
@@ -634,6 +706,7 @@ class RenderingPolicyTests(unittest.TestCase):
                     ("/usr/bin/x11vnc",),
                 )[0]
                 args = call["argv"]
+                self.assertEqual(args.count("-nolookup"), 1)
                 self.assertEqual(
                     "-localhost" in args, software_relay == "1" or nvidia == "1"
                 )
@@ -652,6 +725,49 @@ class RenderingPolicyTests(unittest.TestCase):
                     self.assertIn("-nomodtweak", args)
                     self.assertIn("-noxkb", args)
                     self.assertIsNone(call["environment"]["WAYLAND_DISPLAY"])
+
+        with (
+            self.subTest(route="modern-wayland-krfb"),
+            tempfile.TemporaryDirectory() as directory,
+        ):
+            password = Path(directory) / "password"
+            password.write_text("fixture-password")
+            scale = Path(directory) / "scale"
+            scale.write_text(
+                '#!/bin/sh\n[ "$1" = "--scale" ] || exit 1\nprintf "%s\\n" 1.25\n'
+            )
+            scale.chmod(0o755)
+            records = shell_calls(
+                source.replace("/etc/plasma/vnc-password", str(password)).replace(
+                    "/usr/local/libexec/plasma-remote-output", str(scale)
+                ),
+                {
+                    "DISPLAY_BACKEND": "wayland",
+                    "PLASMA_SOFTWARE_CAPTURE": "0",
+                    "DISPLAY_WIDTH": "800",
+                    "DISPLAY_HEIGHT": "600",
+                },
+                ("/usr/bin/krfb-virtualmonitor", "/usr/bin/x11vnc"),
+            )
+            self.assertEqual(
+                [call["program"] for call in records], ["krfb-virtualmonitor"]
+            )
+            self.assertEqual(
+                records[0]["argv"],
+                [
+                    "--name",
+                    "Plasma",
+                    "--resolution",
+                    "800x600",
+                    "--scale",
+                    "1.25",
+                    "--port",
+                    "5900",
+                    "--password",
+                    "fixture-password",
+                ],
+            )
+            self.assertNotIn("-nolookup", records[0]["argv"])
 
     def test_nested_target_orders_conditional_backing_before_session(self):
         root = SOURCE.parents[1]
