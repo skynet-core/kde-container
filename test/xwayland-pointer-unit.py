@@ -39,6 +39,7 @@ def main():
             (
                 "MakeAtom",
                 "dixChangeWindowProperty",
+                "xwl_randr_add_modes_fixed",
                 "wl_proxy_get_version",
                 "wl_proxy_marshal_flags",
                 "libdecor_configuration_get_content_size",

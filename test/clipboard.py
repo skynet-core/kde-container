@@ -1023,6 +1023,29 @@ def nested_window_phases(runtime, image, host_image, case, common, *, no_gpu=Fal
                     phase,
                     lambda value: len(frontend_windows(value)) == 1,
                 )
+                initial = only_window(state)
+                report["initial"] = initial
+                report["initial_parent_output"] = only_output(state)
+                frame, client_area = initial["frame"], initial["client"]
+                host = report["initial_parent_output"]["geometry"]
+                tolerance = 1 / scale + 1e-6
+                report["initial_frame_must_fit"] = all(
+                    int(config[setting]) + frame[extent] - client_area[extent]
+                    <= host[extent] + tolerance
+                    for setting, extent in (
+                        ("DISPLAY_WIDTH", "width"),
+                        ("DISPLAY_HEIGHT", "height"),
+                    )
+                )
+                if report["initial_frame_must_fit"]:
+                    assert all(
+                        host[axis] - tolerance <= frame[axis]
+                        and frame[axis] + frame[extent]
+                        <= host[axis] + host[extent] + tolerance
+                        for axis, extent in (("x", "width"), ("y", "height"))
+                    ), (
+                        f"Cold nested initial frame is outside the host output: {initial}"
+                    )
                 identifier = only_window(state)["id"]
                 select = (
                     "const w=windows.find(w=>w.internalId.toString()==="
@@ -1057,7 +1080,6 @@ def nested_window_phases(runtime, image, host_image, case, common, *, no_gpu=Fal
                     + json.dumps(frame)
                     + ";workspace.activeWindow=w;",
                 )
-                tolerance = 1 / scale + 1e-6
 
                 def frame_is(
                     state, expected, identifier=identifier, tolerance=tolerance
