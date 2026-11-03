@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -20,6 +21,93 @@ KIOSK = ROOT / "test/kiosk.py"
 
 
 class FailureReportingTests(unittest.TestCase):
+    def test_performance_startup_failure_keeps_console_and_page_errors(self):
+        playwright = Mock()
+        browser = playwright.chromium.launch.return_value
+        page = browser.new_page.return_value
+        handlers = {}
+        page.on.side_effect = lambda event, handler: handlers.update({event: handler})
+
+        def navigate(*_arguments, **_settings):
+            handlers["console"](
+                types.SimpleNamespace(type="error", text="startup console evidence")
+            )
+            if "pageerror" in handlers:
+                handlers["pageerror"](RuntimeError("startup page evidence"))
+
+        page.goto.side_effect = navigate
+        page.wait_for_function.side_effect = TimeoutError(
+            "intentional noVNC startup timeout"
+        )
+        package = types.ModuleType("playwright")
+        package.__path__ = []
+        sync_api = types.ModuleType("playwright.sync_api")
+        sync_api.sync_playwright = lambda: contextlib.nullcontext(playwright)
+        with patch.dict(
+            sys.modules, {"playwright": package, "playwright.sync_api": sync_api}
+        ):
+            spec = importlib.util.spec_from_file_location(
+                "failure_reporting_performance", ROOT / "test/performance.py"
+            )
+            performance = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(performance)
+
+        def execute(*arguments, **_settings):
+            stdout = (
+                "127.0.0.1:6080\n"
+                if "port" in arguments
+                else "Compositing Type: OpenGL\nOpenGL renderer string: NVIDIA test renderer\n"
+            )
+            return subprocess.CompletedProcess(arguments, 0, stdout, "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.object(
+                    performance,
+                    "__file__",
+                    str(Path(directory) / "test/performance.py"),
+                ),
+                patch.object(sys, "argv", ["performance", "--expect-renderer", "gpu"]),
+                patch.object(
+                    performance,
+                    "launch",
+                    return_value=subprocess.CompletedProcess([], 0, "container", ""),
+                ),
+                patch.object(performance, "wait_ready"),
+                patch.object(performance, "run", side_effect=execute),
+                patch.object(performance, "screenshot") as screenshot,
+                patch.object(performance, "collect_artifacts") as collect,
+                contextlib.redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(
+                    TimeoutError, "intentional noVNC startup timeout"
+                ),
+            ):
+                performance.main()
+            collect.assert_called_once()
+            screenshot.assert_not_called()
+            page.goto.assert_called_once()
+            page.wait_for_function.assert_called_once_with(
+                "window.perfUI.rfb?._rfbConnectionState === 'connected'", timeout=30000
+            )
+            self.assertEqual(page.mouse.method_calls, [])
+            self.assertEqual(page.keyboard.method_calls, [])
+            case = next(Path(directory).glob("test/.artifacts/performance-*"))
+            self.assertTrue(
+                (case / "browser.log").exists(),
+                "Startup failure discarded browser console evidence",
+            )
+            self.assertEqual(
+                (case / "browser.log").read_text(),
+                "error: startup console evidence\npageerror: startup page evidence\n",
+            )
+            report = json.loads((case / "result.json").read_text())
+            self.assertEqual(report["error"], "intentional noVNC startup timeout")
+            self.assertTrue(report["checks"]["renderer"])
+            self.assertNotIn("animation", report)
+            self.assertNotIn("keyboard_latency_ms", report)
+            self.assertNotIn("drag_delta", report)
+            self.assertIn("TimeoutError", (case / "failure.log").read_text())
+
     def test_actual_piped_workflow_suites_propagate_failures(self):
         workflow = WORKFLOW.read_text()
         explicit_bash = re.search(

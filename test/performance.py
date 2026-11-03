@@ -82,6 +82,7 @@ def main():
     name = f"plasma6-performance-{os.getpid()}"
     report = {"settings": vars(options), "checks": {}}
     args = software_options(runtime) if options.no_gpu else []
+    console = []
     try:
         result = launch(
             runtime,
@@ -159,11 +160,11 @@ def main():
             page = browser.new_page(
                 viewport={"width": options.width + 80, "height": options.height + 100}
             )
-            console = []
             page.on(
                 "console",
                 lambda message: console.append(f"{message.type}: {message.text}"),
             )
+            page.on("pageerror", lambda error: console.append(f"pageerror: {error}"))
             page.goto(
                 f"http://127.0.0.1:{port}/vnc.html?autoconnect=1&password=testpass&resize=off"
                 f"&quality={options.quality}&compression={options.compression}"
@@ -277,7 +278,6 @@ def main():
             report["checks"]["input_latency"] = (
                 report["keyboard_latency_ms"]["p95"] <= options.max_latency_p95
             )
-            (artifacts / "browser.log").write_text("\n".join(console) + "\n")
             browser.close()
         print(
             f"{options.image} ({runtime}/{options.backend}): {report['animation']['fps']:.1f} visible fps, "
@@ -297,6 +297,7 @@ def main():
         (artifacts / "failure.log").write_text(traceback.format_exc())
         raise
     finally:
+        (artifacts / "browser.log").write_text("\n".join(console) + "\n")
         (artifacts / "result.json").write_text(json.dumps(report, indent=2) + "\n")
         collect_artifacts(runtime, name, artifacts, services=("vnc",))
         print(f"Artifacts: {artifacts}", flush=True)
