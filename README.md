@@ -1577,6 +1577,14 @@ adds local capture/encoding work. Its VNC listener stays on container loopback
 and is not published. Software QPainter sessions on a Wayland host use a private
 Xvfb backing and a separate viewer display; other older nested paths remain direct.
 
+On a Wayland host, modern virtual-output relays use a private SHM-only Xwayland
+frontend with server decorations. It takes the host surface's startup scale from
+RandR after both the first host configure and scale event, then configures the
+guest's physical resolution and output scale before the application starts. The rootless Xwayland used by guest applications stays the
+distro version. The private frontend preserves fractional pointer coordinates
+through its viewport transform. Its startup scale is retained when the outer
+window is resized; changing the host output scale requires restarting the session.
+
 The internal `PLASMA_SOFTWARE_NESTED` flag identifies this presentation relay;
 its name does not indicate the renderer. Check `LIBGL_ALWAYS_SOFTWARE`, the
 selected GPU in `/etc/plasma/gpu.json` and KWin's renderer information to verify
@@ -1872,6 +1880,12 @@ Kiosk tests cover the Qt editor and actual Chromium, fullscreen display/input,
 application restart with the same KWin process, and absence of Plasma shell.
 Each case retains screenshots, JSON assertions, journals and host-file output
 under `test/.artifacts/`. Web cases exercise the websockify proxy used by noVNC.
+
+The Wayland-on-Wayland kiosk clipboard case first starts three fresh children at
+host scales 1, 1.25 and 2. It checks cold output/application scale, actual outer
+server decorations, first-entry and fractional pointer positions, titlebar move,
+border resize and exact typed/save output. Each child retains its renderer and
+selected GPU evidence before the original clipboard cases run.
 
 For the optional software and performance commands below, select the test
 image you built and the same engine. Choose one image assignment:

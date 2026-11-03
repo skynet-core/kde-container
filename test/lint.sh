@@ -25,7 +25,7 @@ ruff format --check .
 python3 build/render-dockerfiles.py --check
 hadolint --failure-threshold info "${dockerfiles[@]}"
 actionlint
-clang-format --dry-run --Werror "${cpp_files[@]}"
+clang-format --dry-run --Werror "${cpp_files[@]}" test/xwayland-pointer-unit.c test/xwayland-rootful-ready-unit.c
 if [[ -n ${NATIVE_TEST_IMAGE:-} ]]; then
     python3 test/native/sdk-inputs.py "$NATIVE_TEST_IMAGE" "$artifacts" "${cpp_files[@]}"
 else

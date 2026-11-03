@@ -16,11 +16,15 @@ FILES = (
     "test/native/CMakeLists.txt",
     "test/egl-fence-stub.cpp",
     "test/egl-fence-test.cpp",
+    "test/xwayland-pointer-unit.c",
+    "test/xwayland-pointer-unit.py",
+    "test/xwayland-rootful-ready-unit.c",
     "build/install-packages",
     "build/create-user",
     "build/normalize-runtime",
     "build/collect-artifacts",
     "build/tigervnc-viewer",
+    "build/xwayland-frontend",
     "build/websockify-requirements.txt",
 )
 

@@ -4,6 +4,7 @@ __pycache__/
 !/build/collect-artifacts
 !/build/arch-kwin-x11
 !/build/tigervnc-viewer
+!/build/xwayland-frontend
 !/build/kwin-*
 !/build/kwin-phases/
 !/build/KWIN.md

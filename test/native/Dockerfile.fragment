@@ -7,13 +7,13 @@ COPY test/native/packages.txt /build-support/packages/native-test.txt
 RUN /build-support/install-packages native-test
 COPY .clang-tidy .clangd /source/
 COPY Dockerfile.fedora-44 /source/
-COPY build/install-packages build/create-user build/normalize-runtime build/collect-artifacts build/tigervnc-viewer build/websockify-requirements.txt /source/build/
+COPY build/install-packages build/create-user build/normalize-runtime build/collect-artifacts build/tigervnc-viewer build/xwayland-frontend build/websockify-requirements.txt /source/build/
 COPY build/packages/fedora/ /source/build/packages/fedora/
 COPY patches/ /source/patches/
 COPY native/ /source/native/
 COPY compat/ /source/compat/
 COPY test/native/ /source/test/native/
-COPY test/egl-fence-stub.cpp test/egl-fence-test.cpp /source/test/
+COPY test/egl-fence-stub.cpp test/egl-fence-test.cpp test/xwayland-pointer-unit.c test/xwayland-pointer-unit.py test/xwayland-rootful-ready-unit.c /source/test/
 RUN printf '\ninclude(/source/test/native/tigervnc-enter.cmake)\n' >> /tigervnc-source/vncviewer/CMakeLists.txt \
     && cmake -S /tigervnc-source -B /tigervnc-build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     && cmake --build /tigervnc-build --parallel 2 --target viewport-enter viewer-crypto \
