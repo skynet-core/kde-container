@@ -45,7 +45,35 @@
  struct xwl_window *
  xwl_window_get(WindowPtr window)
  {
-@@ -997,6 +1024,8 @@
+@@ -974,20 +1001,15 @@
+     double scale;
+ 
+     if (libdecor_configuration_get_content_size(configuration, frame, &width, &height)) {
+-        new_width = (double) width;
+-        new_height = (double) height;
++        scale = xwl_window_get_fractional_scale_factor(xwl_window);
++        new_width = (double) width * xwl_screen->global_surface_scale * scale;
++        new_height = (double) height * xwl_screen->global_surface_scale * scale;
+     }
+     else {
+-        new_width = xwl_screen->width / xwl_screen->global_surface_scale;
+-        new_height = xwl_screen->height / xwl_screen->global_surface_scale;
+-    }
+-
+-    new_width *= xwl_screen->global_surface_scale;
+-    new_height *= xwl_screen->global_surface_scale;
+-
+-    scale = xwl_window_get_fractional_scale_factor(xwl_window);
+-    new_width *= scale;
+-    new_height *= scale;
++        /* The current physical screen already includes the preferred scale. */
++        new_width = xwl_screen->width;
++        new_height = xwl_screen->height;
++    }
+ 
+     xwl_window_maybe_resize(xwl_window, new_width, new_height);
+ 
+@@ -997,6 +1019,8 @@
      xwl_window_update_libdecor_size(xwl_window, configuration,
                                      round(new_width), round(new_height));
      wl_surface_commit(xwl_window->surface);
@@ -54,7 +82,7 @@
  }
  
  static void
-@@ -1043,6 +1072,8 @@
+@@ -1043,6 +1067,8 @@
  
      xdg_surface_ack_configure(xdg_surface, serial);
      wl_surface_commit(xwl_window->surface);
@@ -63,7 +91,7 @@
  }
  
  static const struct xdg_surface_listener xdg_surface_listener = {
-@@ -1149,6 +1180,10 @@
+@@ -1149,6 +1175,10 @@
      if (xwl_output) {
          xwl_window_enter_output(xwl_window, xwl_output);
          xwl_window_update_surface_scale(xwl_window);
@@ -74,7 +102,7 @@
      }
  
      if (xwl_window->wl_output != wl_output) {
-@@ -1280,11 +1315,17 @@
+@@ -1280,11 +1310,17 @@
      struct xwl_screen *xwl_screen = xwl_window->xwl_screen;
      double previous_scale = xwl_window_get_fractional_scale_factor(xwl_window);
  
@@ -92,7 +120,7 @@
  }
  
  static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
-@@ -1487,6 +1528,8 @@
+@@ -1487,6 +1523,8 @@
      xwl_window->toplevel = window;
      xwl_window->surface_window = window;
      xwl_window->fractional_scale_numerator = FRACTIONAL_SCALE_DENOMINATOR;
