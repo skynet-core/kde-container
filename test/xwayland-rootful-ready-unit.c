@@ -10,10 +10,14 @@ static WindowPtr expected_window;
 static unsigned publications;
 static CARD32 observed_numerator;
 static int surface_token, xdg_token, output_token, frame_token, state_token;
+static int content_width, content_height;
+static int expected_content_width, expected_content_height;
+static unsigned mode_requests;
 
 Atom __wrap_MakeAtom(const char *, unsigned, Bool);
 int __wrap_dixChangeWindowProperty(ClientPtr, WindowPtr, Atom, Atom, int, int,
                                    unsigned long, const void *, Bool);
+Bool __wrap_xwl_randr_add_modes_fixed(struct xwl_output *, int, int);
 _X_EXPORT uint32_t __wrap_wl_proxy_get_version(struct wl_proxy *);
 _X_EXPORT struct wl_proxy *
 __wrap_wl_proxy_marshal_flags(struct wl_proxy *, uint32_t,
@@ -50,6 +54,14 @@ int __wrap_dixChangeWindowProperty(ClientPtr client, WindowPtr window,
   return Success;
 }
 
+Bool __wrap_xwl_randr_add_modes_fixed(struct xwl_output *output, int width,
+                                      int height) {
+  assert(output && width > 0 && height > 0);
+  mode_requests++;
+  /* Stop at mode allocation; keep the actual callback and resize arithmetic. */
+  return FALSE;
+}
+
 uint32_t __wrap_wl_proxy_get_version(struct wl_proxy *proxy) {
   assert(proxy == (struct wl_proxy *)&surface_token ||
          proxy == (struct wl_proxy *)&xdg_token);
@@ -72,14 +84,17 @@ bool __wrap_libdecor_configuration_get_content_size(
     struct libdecor_configuration *configuration, struct libdecor_frame *frame,
     int *width, int *height) {
   (void)configuration;
-  (void)width;
-  (void)height;
   assert(frame == (struct libdecor_frame *)&frame_token);
-  return false;
+  if (!content_width)
+    return false;
+  *width = content_width;
+  *height = content_height;
+  return true;
 }
 
 struct libdecor_state *__wrap_libdecor_state_new(int width, int height) {
-  assert(width == 1280 && height == 960);
+  assert(width == expected_content_width && height == expected_content_height &&
+         "Initial configure must not scale existing pixels twice");
   return (struct libdecor_state *)&state_token;
 }
 
@@ -108,11 +123,16 @@ static void setup(struct fixture *state, int global, int numerator) {
   memset(state, 0, sizeof(*state));
   publications = 0;
   observed_numerator = 0;
+  content_width = content_height = 0;
+  expected_content_width = 1280;
+  expected_content_height = 960;
+  mode_requests = 0;
   state->screen.screen = &state->xscreen;
   state->screen.width = 1280;
   state->screen.height = 960;
   state->screen.global_surface_scale = global;
   state->screen.hidpi = TRUE;
+  state->screen.fixed_output = &state->output;
   dixInitScreenSpecificPrivates(&state->xscreen);
   state->root = dixAllocateScreenObjectWithPrivates(&state->xscreen, WindowRec,
                                                     PRIVATE_WINDOW);
@@ -234,5 +254,37 @@ int main(void) {
   }
   printf("actual Xwayland rootful readiness callbacks: %u cases passed\n",
          cases);
+  fflush(stdout);
+#ifdef XWL_HAS_LIBDECOR
+  unsigned size_cases = 0;
+  const int scales[][2] = {{1, 150}, {1, 240}, {2, 120}};
+  for (unsigned index = 0; index < sizeof(scales) / sizeof(scales[0]);
+       index++) {
+    for (int supplied_size = 0; supplied_size <= 1; supplied_size++) {
+      const int global = scales[index][0];
+      const int numerator = scales[index][1];
+      const double scale = global * numerator / 120.0;
+      setup(&state, global, numerator);
+      /* The earlier host scale event already resized the physical screen. */
+      state.screen.width = (int)(1280 * scale);
+      state.screen.height = (int)(960 * scale);
+      state.window.rootful_scale_received = TRUE;
+      if (supplied_size) {
+        content_width = expected_content_width = 800;
+        content_height = expected_content_height = 600;
+      }
+      configure(&state, 1);
+      assert(state.screen.width == expected_content_width * scale);
+      assert(state.screen.height == expected_content_height * scale);
+      assert(mode_requests == (unsigned)supplied_size);
+      assert(publications == 1);
+      assert(observed_numerator == (CARD32)(global * numerator));
+      cleanup(&state);
+      size_cases++;
+    }
+  }
+  printf("actual Xwayland initial configure dimensions: %u cases passed\n",
+         size_cases);
+#endif
   return 0;
 }

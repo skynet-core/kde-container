@@ -33,6 +33,9 @@ class NestedWindowTests(unittest.TestCase):
         client_origin_epsilon=0,
         offgrid_pixel_loss=0,
         offgrid_guest_offset=False,
+        initial_frames=None,
+        requested_size=(1024, 768),
+        stop_after_initial=False,
     ):
         spec = importlib.util.spec_from_file_location("nested_clipboard", SOURCE)
         clipboard = importlib.util.module_from_spec(spec)
@@ -47,6 +50,7 @@ class NestedWindowTests(unittest.TestCase):
         parent_cursor = {"x": 0, "y": 0}
         child_cursor = {"x": 0, "y": 0}
         inside_moves = 0
+        setups = []
 
         def sleep(seconds):
             nonlocal now
@@ -59,6 +63,7 @@ class NestedWindowTests(unittest.TestCase):
                 active = name
                 output = case / "typed.txt"
                 frame = {"x": 0, "y": 0, "width": 1024, "height": 804 if ssd else 768}
+                frame.update((initial_frames or {}).get(scale, {}))
                 child_cursor = {"x": 0, "y": 0}
                 inside_moves = 0
 
@@ -105,6 +110,9 @@ class NestedWindowTests(unittest.TestCase):
             return subprocess.CompletedProcess(arguments, 0, stdout, "")
 
         def state(_runtime, name, _config, _case, body=""):
+            if body:
+                setups.append((scale, body))
+                assert not stop_after_initial, "Stopped after initial geometry"
             if "w.frameGeometry=" in body:
                 frame.update(
                     json.JSONDecoder().raw_decode(body.split("w.frameGeometry=", 1)[1])[
@@ -247,6 +255,8 @@ class NestedWindowTests(unittest.TestCase):
                         "PLASMA_SOFTWARE_CAPTURE": "0",
                         "PLASMA_SOFTWARE_NESTED": "1",
                         "PLASMA_SOFTWARE_DISPLAY": ":110",
+                        "DISPLAY_WIDTH": str(requested_size[0]),
+                        "DISPLAY_HEIGHT": str(requested_size[1]),
                     },
                 ),
                 patch.object(clipboard, "nested_kwin_state", side_effect=state),
@@ -268,7 +278,69 @@ class NestedWindowTests(unittest.TestCase):
                     cleanup.call_args_list,
                 )
                 self.renderer_children = renderer_children
+                self.setups = setups
+                self.phase_reports = [
+                    json.loads(path.read_text())
+                    for path in sorted(
+                        (case / "outer-window").glob("scale-*/result.json")
+                    )
+                ]
                 return error, reports
+
+    def test_natural_offscreen_scale_two_rejects_before_placement_or_phase_input(self):
+        error, reports = self.exercise(
+            initial_frames={2: {"x": 512, "y": 384, "width": 1024, "height": 796}}
+        )
+        self.assertRegex(str(error), "initial frame is outside the host output")
+        self.assertIsNone(reports)
+        self.assertFalse(any(scale == 2 for scale, _body in self.setups))
+        self.assertEqual(self.client.pointer.call_count, 6)
+        self.assertEqual(self.client.drag.call_count, 4)
+        self.assertEqual(self.client.click.call_count, 2)
+        self.assertEqual(self.client.text.call_count, 2)
+        self.assertEqual(len(self.cleanup), 4)
+
+    def test_natural_frame_may_start_at_any_visible_position(self):
+        error, reports = self.exercise(
+            initial_frames={scale: {"x": 200, "y": 100} for scale in (1, 1.25, 2)}
+        )
+        self.assertIsNone(error)
+        self.assertTrue(all(report["initial_frame_must_fit"] for report in reports))
+        self.assertTrue(
+            all(report["initial"]["frame"]["x"] == 200 for report in reports)
+        )
+        self.assertTrue(all(report["placed"]["frame"]["x"] == 80 for report in reports))
+        self.assertEqual(self.client.pointer.call_count, 9)
+        self.assertEqual(self.client.drag.call_count, 6)
+
+    def test_each_edge_of_a_fitting_natural_frame_rejects_outside_before_input(self):
+        for position in (
+            {"x": -2},
+            {"y": -2},
+            {"x": 2818},
+            {"y": 1358},
+        ):
+            with self.subTest(position=position):
+                error, reports = self.exercise(initial_frames={1: position})
+                self.assertRegex(str(error), "initial frame is outside the host output")
+                self.assertIsNone(reports)
+                self.assertEqual(self.setups, [])
+                self.client.pointer.assert_not_called()
+                self.client.drag.assert_not_called()
+                self.client.text.assert_not_called()
+                self.assertEqual(len(self.cleanup), 2)
+
+    def test_oversized_configuration_does_not_impose_natural_containment(self):
+        error, reports = self.exercise(
+            initial_frames={1: {"width": 4096, "height": 2340}},
+            requested_size=(4096, 2304),
+            stop_after_initial=True,
+        )
+        self.assertRegex(str(error), "Stopped after initial geometry")
+        self.assertIsNone(reports)
+        self.assertFalse(self.phase_reports[0]["initial_frame_must_fit"])
+        self.client.pointer.assert_not_called()
+        self.client.drag.assert_not_called()
 
     def test_missing_actual_ssd_rejects_before_any_gui_input_and_cleans_both(self):
         error, reports = self.exercise(ssd=False)
