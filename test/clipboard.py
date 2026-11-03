@@ -17,7 +17,7 @@ import traceback
 import uuid
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 from rfb import RFBClient
 from support import (
     available_backends,
@@ -690,6 +690,655 @@ else:
     )
 
 
+def nested_kwin_state(runtime, name, config, case, body=""):
+    """Observe only a disposable compositor; mutations are explicit setup scripts."""
+    tag = "NESTED_WINDOW_" + uuid.uuid4().hex
+    script = "/run/plasma/" + tag + ".js"
+    source = """function rect(r) { return {x:r.x,y:r.y,width:r.width,height:r.height}; }
+const windows = workspace.stackingOrder.filter(w => w.normalWindow);
+BODY
+console.warn(TAG + ' ' + JSON.stringify({
+    outputs:workspace.screens.map(o=>({name:o.name,scale:o.devicePixelRatio,geometry:rect(o.geometry)})),
+    cursor:{x:workspace.cursorPos.x,y:workspace.cursorPos.y},
+    windows:windows.map(w=>({id:w.internalId.toString(),caption:w.caption,
+        frame:rect(w.frameGeometry),client:rect(w.clientGeometry),
+        fullScreen:w.fullScreen,noBorder:w.noBorder}))
+}));
+""".replace("BODY", body).replace("TAG", json.dumps(tag))
+
+    def dbus(*arguments):
+        result = run(
+            runtime,
+            "exec",
+            "--user=plasma",
+            name,
+            "env",
+            *display_environment(config),
+            "QT_QPA_PLATFORM=offscreen",
+            "qdbus-qt6",
+            "org.kde.KWin",
+            *arguments,
+            timeout=5,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    result = run(
+        runtime,
+        "exec",
+        name,
+        "python3",
+        "-c",
+        "from pathlib import Path; import sys; Path(sys.argv[1]).write_text(sys.argv[2])",
+        script,
+        source,
+    )
+    assert result.returncode == 0, result.stderr
+    try:
+        identifier = int(dbus("/Scripting", "loadScript", script, tag).strip())
+        assert identifier >= 0, "Nested window script did not load"
+        dbus(f"/Scripting/Script{identifier}", "run")
+        deadline = time.monotonic() + 5
+        while True:
+            result = run(
+                runtime,
+                "exec",
+                name,
+                "journalctl",
+                "-u",
+                "plasma-session.service",
+                "--no-pager",
+                "-o",
+                "cat",
+                "-g",
+                tag,
+                timeout=5,
+            )
+            lines = [
+                line.split(tag + " ", 1)[1]
+                for line in result.stdout.splitlines()
+                if tag + " " in line
+            ]
+            if lines:
+                state = json.loads(lines[-1])
+                with (case / "kwin-state.jsonl").open("a") as log:
+                    log.write(
+                        json.dumps({"container": name, "setup": body, **state}) + "\n"
+                    )
+                return state
+            assert time.monotonic() < deadline, (
+                "Nested compositor did not report its window/output state"
+            )
+            time.sleep(0.1)
+    finally:
+        try:
+            dbus("/Scripting", "unloadScript", tag)
+        finally:
+            run(runtime, "exec", name, "rm", "-f", script)
+
+
+def frontend_pointer(runtime, name, config):
+    """Read the private frontend's physical endpoint without generating input."""
+    source = """import ctypes as c,json
+x=c.CDLL('libX11.so.6');p=c.c_void_p;u=c.c_ulong;i=c.c_int
+x.XOpenDisplay.argtypes=[c.c_char_p];x.XOpenDisplay.restype=p
+x.XDefaultRootWindow.argtypes=[p];x.XDefaultRootWindow.restype=u
+x.XDefaultScreen.argtypes=[p];x.XDefaultScreen.restype=i
+x.XQueryPointer.argtypes=[p,u]+[c.POINTER(u)]*2+[c.POINTER(i)]*4+[c.POINTER(c.c_uint)]
+x.XDisplayWidth.argtypes=[p,i];x.XDisplayHeight.argtypes=[p,i]
+x.XCloseDisplay.argtypes=[p]
+d=x.XOpenDisplay(None);assert d,'Private frontend display is unavailable'
+try:
+ root=x.XDefaultRootWindow(d);screen=x.XDefaultScreen(d)
+ r,child=u(),u();rx,ry,wx,wy=i(),i(),i(),i();mask=c.c_uint()
+ assert x.XQueryPointer(d,root,c.byref(r),c.byref(child),c.byref(rx),c.byref(ry),c.byref(wx),c.byref(wy),c.byref(mask)),'Private frontend pointer is unavailable'
+ print(json.dumps({'position':[rx.value,ry.value],'pixels':[x.XDisplayWidth(d,screen),x.XDisplayHeight(d,screen)]}))
+finally:x.XCloseDisplay(d)
+"""
+    result = run(
+        runtime,
+        "exec",
+        "--user=plasma",
+        name,
+        "env",
+        "DISPLAY=" + config["PLASMA_SOFTWARE_DISPLAY"],
+        "XAUTHORITY=/etc/plasma/Xauthority",
+        "python3",
+        "-c",
+        source,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def nested_window_phases(runtime, image, host_image, case, common, *, no_gpu=False):
+    """Cold scale, SSD and real drag/resize/input through the outer host window."""
+    directory = case / "outer-window"
+    directory.mkdir()
+    host_runtime = directory / "runtime"
+    host_runtime.mkdir(mode=0o700)
+    host_x11 = directory / "x11"
+    host_x11.mkdir(mode=0o1777)
+    parent = f"plasma6-window-host-{os.getpid()}"
+    client = None
+    reports = []
+    try:
+        launch_checked(
+            directory,
+            "host",
+            runtime,
+            host_image,
+            parent,
+            "wayland",
+            "vnc",
+            *common,
+            "--mount",
+            f"type=bind,source={host_runtime},target=/run/plasma",
+            "--mount",
+            f"type=bind,source={host_x11},target=/tmp/.X11-unix",
+            DISPLAY_WIDTH="3840",
+            DISPLAY_HEIGHT="2160",
+        )
+        address = run(runtime, "port", parent, "5900/tcp").stdout.strip()
+        deadline = time.monotonic() + 30
+        while client is None:
+            try:
+                client = NestedClient(int(address.rsplit(":", 1)[1]))
+            except (OSError, RuntimeError):
+                assert time.monotonic() < deadline, (
+                    "Nested parent RFB did not become ready"
+                )
+                time.sleep(0.25)
+        host_config = configuration(runtime, parent)
+
+        def observe(name, config, phase, predicate, *, description="window/output"):
+            deadline = time.monotonic() + 20
+            while True:
+                state = nested_kwin_state(runtime, name, config, phase)
+                if predicate(state):
+                    return state
+                assert time.monotonic() < deadline, (
+                    f"Nested {description} did not acknowledge state: {state}"
+                )
+                time.sleep(0.1)
+
+        def frontend_windows(state):
+            caption = "Xwayland on " + config["PLASMA_SOFTWARE_DISPLAY"]
+            return [
+                window for window in state["windows"] if window["caption"] == caption
+            ]
+
+        def only_window(state):
+            windows = frontend_windows(state)
+            assert len(windows) == 1, "Expected one matching private nested frontend"
+            return windows[0]
+
+        def only_output(state):
+            assert len(state["outputs"]) == 1, "Expected one active output"
+            return state["outputs"][0]
+
+        def screenshot(phase, label, scale, window):
+            deadline = time.monotonic() + 20
+            while True:
+                picture = client.screenshot()
+                origin = only_output(parent_state)["geometry"]
+                area = window["client"]
+                left = round((area["x"] - origin["x"]) * scale)
+                top = round((area["y"] - origin["y"]) * scale)
+                image = picture.crop(
+                    (
+                        left,
+                        top,
+                        left + round(area["width"] * scale),
+                        top + round(area["height"] * scale),
+                    )
+                )
+                banner = banner_box(image)
+                difference = ImageChops.difference(
+                    image, Image.new("RGB", image.size, (36, 88, 180))
+                )
+                red, green, blue = difference.split()
+                maximum = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+                save = maximum.point(lambda value: 255 if value <= 3 else 0).getbbox()
+                if banner and save and abs(banner[3] - banner[1] - 44 * scale) <= 1:
+                    picture.save(phase / (label + ".png"))
+
+                    def absolute(box, left=left, top=top):
+                        return (
+                            box[0] + left,
+                            box[1] + top,
+                            box[2] + left,
+                            box[3] + top,
+                        )
+
+                    return picture, absolute(banner), absolute(save)
+                assert time.monotonic() < deadline, (
+                    f"Scaled Qt fixture did not paint at {scale}: banner={banner}, save={save}"
+                )
+                time.sleep(0.1)
+
+        for scale in (1, 1.25, 2):
+            phase = directory / f"scale-{scale * 100:g}"
+            phase.mkdir()
+            output = phase / "typed.txt"
+            output.touch(mode=0o600)
+            inner = f"plasma6-window-inner-{os.getpid()}-{scale * 100:g}"
+            report = {"scale": scale, "passed": False}
+            try:
+                parent_state = nested_kwin_state(runtime, parent, host_config, phase)
+                output_name = only_output(parent_state)["name"]
+                result = run(
+                    runtime,
+                    "exec",
+                    "--user=plasma",
+                    parent,
+                    "env",
+                    *display_environment(host_config),
+                    "kscreen-doctor",
+                    f"output.{output_name}.scale.{scale:g}",
+                )
+                assert result.returncode == 0, result.stderr
+                parent_state = observe(
+                    parent,
+                    host_config,
+                    phase,
+                    lambda state, scale=scale: (
+                        abs(only_output(state)["scale"] - scale) < 1e-6
+                    ),
+                )
+                report["parent_output"] = only_output(parent_state)
+                launch_checked(
+                    phase,
+                    "inner",
+                    runtime,
+                    image,
+                    inner,
+                    "wayland",
+                    "nested",
+                    *common,
+                    "--mount",
+                    f"type=bind,source={host_runtime}/wayland-0,target=/run/host/wayland,readonly",
+                    "-e",
+                    "HOST_WAYLAND_DISPLAY=/run/host/wayland",
+                    "--mount",
+                    f"type=bind,source={output},target=/e2e-output/typed.txt",
+                    HOST_DISPLAY_BACKEND="wayland",
+                    WAYLAND_DISPLAY="/nonexistent-window-test-socket",
+                    TARGET_APP="plasma-ui-fixture /e2e-output/typed.txt",
+                )
+                config = configuration(runtime, inner)
+                # This regression targets the modern virtual-output kiosk relay.
+                assert config.get("PLASMA_SOFTWARE_CAPTURE") == "0", (
+                    "Expected the modern kiosk output path"
+                )
+                renderer = run(runtime, *renderer_command(inner))
+                (phase / "renderer-active.log").write_text(
+                    renderer.stdout + renderer.stderr
+                )
+                assert renderer.returncode == 0, renderer.stderr
+                report["renderer"] = [
+                    line
+                    for line in renderer.stdout.splitlines()
+                    if line.startswith(("Compositing Type:", "OpenGL renderer string:"))
+                ]
+                gpu = run(runtime, "exec", inner, "cat", "/etc/plasma/gpu.json")
+                assert gpu.returncode == 0, gpu.stderr
+                report["gpu"] = json.loads(gpu.stdout)
+                selected = report["gpu"].get("selected") or {}
+                software_renderer = any(
+                    name in "\n".join(report["renderer"]).lower()
+                    for name in (
+                        "qpainter",
+                        "llvmpipe",
+                        "softpipe",
+                        "swrast",
+                        "swiftshader",
+                    )
+                )
+                report["nvidia_renderer"] = any(
+                    line.startswith("OpenGL renderer string:")
+                    and "NVIDIA" in line.upper()
+                    for line in report["renderer"]
+                )
+                if no_gpu:
+                    assert software_renderer, report["renderer"]
+                    report["software_renderer"] = True
+                else:
+                    assert (
+                        selected.get("hardware") is True
+                        and not software_renderer
+                        and any(
+                            line.startswith("OpenGL renderer string:")
+                            and line.partition(":")[2].strip()
+                            for line in report["renderer"]
+                        )
+                    ), (
+                        f"Expected an actual hardware renderer in the cold child: {report['renderer']}"
+                    )
+                    if selected.get("vendor", "").startswith("NVIDIA"):
+                        assert report["nvidia_renderer"], report["renderer"]
+                state = observe(
+                    parent,
+                    host_config,
+                    phase,
+                    lambda value: len(frontend_windows(value)) == 1,
+                )
+                identifier = only_window(state)["id"]
+                select = (
+                    "const w=windows.find(w=>w.internalId.toString()==="
+                    + json.dumps(identifier)
+                    + ");if(!w)throw Error('Nested frontend changed');"
+                )
+                nested_kwin_state(
+                    runtime,
+                    parent,
+                    host_config,
+                    phase,
+                    select
+                    + "w.fullScreen=false;w.setMaximize(false,false);w.noBorder=false;",
+                )
+                state = observe(
+                    parent,
+                    host_config,
+                    phase,
+                    lambda value: (
+                        not only_window(value)["fullScreen"]
+                        and not only_window(value)["noBorder"]
+                    ),
+                )
+                frame = {**only_window(state)["frame"], "x": 80, "y": 60}
+                nested_kwin_state(
+                    runtime,
+                    parent,
+                    host_config,
+                    phase,
+                    select
+                    + "w.frameGeometry="
+                    + json.dumps(frame)
+                    + ";workspace.activeWindow=w;",
+                )
+                tolerance = 1 / scale + 1e-6
+
+                def frame_is(
+                    state, expected, identifier=identifier, tolerance=tolerance
+                ):
+                    window = only_window(state)
+                    assert window["id"] == identifier, (
+                        "Nested frontend changed during gesture"
+                    )
+                    return all(
+                        abs(window["frame"][key] - value) <= tolerance
+                        for key, value in expected.items()
+                    )
+
+                state = observe(
+                    parent,
+                    host_config,
+                    phase,
+                    lambda value, frame=frame: frame_is(value, frame),
+                )
+                window = only_window(state)
+                assert (
+                    window["client"]["y"] > window["frame"]["y"]
+                    and window["frame"]["height"] > window["client"]["height"]
+                ), "Nested frontend has no actual server decoration"
+                report["placed"] = window
+                child_state = observe(
+                    inner,
+                    config,
+                    phase,
+                    lambda value, scale=scale: (
+                        abs(only_output(value)["scale"] - scale) < 1e-6
+                    ),
+                )
+                child_output = only_output(child_state)
+                assert (
+                    abs(child_output["geometry"]["width"] - 1024) <= tolerance
+                    and abs(child_output["geometry"]["height"] - 768) <= tolerance
+                ), "Cold child logical output changed its configured size"
+                report["child_output_before"] = child_output
+                _, before, _ = screenshot(phase, "01-placed", scale, window)
+                origin = only_output(parent_state)["geometry"]
+
+                def physical(x, y, origin=origin, scale=scale):
+                    return (
+                        round((x - origin["x"]) * scale),
+                        round((y - origin["y"]) * scale),
+                    )
+
+                # A fresh surface enter must already use the known host scale.
+                # A second in-surface motion would hide the enter-only regression.
+                outside = physical(frame["x"] - 20, frame["y"] - 20)
+                client.pointer(*outside)
+                observe(
+                    parent,
+                    host_config,
+                    phase,
+                    lambda value, frame=frame, tolerance=tolerance: all(
+                        abs(value["cursor"][axis] - (frame[axis] - 20)) <= tolerance
+                        for axis in ("x", "y")
+                    ),
+                    description="outside pointer",
+                )
+                target = {
+                    "x": child_output["geometry"]["x"] + 128,
+                    "y": child_output["geometry"]["y"] + 96,
+                }
+                entry = physical(
+                    window["client"]["x"] + 128, window["client"]["y"] + 96
+                )
+                report["pointer_entry"] = {
+                    "outside_parent_physical": outside,
+                    "entry_parent_physical": entry,
+                    "expected_child_logical": target,
+                    "physical_tolerance": 1,
+                    "arithmetic_epsilon": 1e-6,
+                    "entry_events": 1,
+                }
+                requested_frontend = [
+                    entry[index] - (window["client"][axis] - origin[axis]) * scale
+                    for index, axis in enumerate(("x", "y"))
+                ]
+                report["pointer_entry"]["requested_frontend_physical"] = (
+                    requested_frontend
+                )
+                client.pointer(*entry)
+
+                def endpoint_reached(
+                    value,
+                    point_report=report["pointer_entry"],
+                    inner=inner,
+                    config=config,
+                    child_output=child_output,
+                    scale=scale,
+                    requested_frontend=requested_frontend,
+                ):
+                    point_report["observed_child_logical"] = value["cursor"]
+                    frontend = frontend_pointer(runtime, inner, config)
+                    point_report["observed_frontend"] = frontend
+                    assert frontend["pixels"] == [
+                        round(child_output["geometry"][axis] * scale)
+                        for axis in ("width", "height")
+                    ], "Private frontend pixel dimensions changed"
+                    # The frontend has integer physical coordinates; the child
+                    # observer is QPoint, rounded from logical QPointF. Check
+                    # each API in its own coordinate space without adding its
+                    # rounding error to the one-physical-pixel transport limit.
+                    expected_child = {}
+                    for index, axis in enumerate(("x", "y")):
+                        coordinate = (
+                            child_output["geometry"][axis]
+                            + frontend["position"][index] / scale
+                        )
+                        expected_child[axis] = int(
+                            coordinate + (0.5 if coordinate >= 0 else -0.5)
+                        )
+                    point_report["expected_child_logical_integer"] = expected_child
+                    return (
+                        all(
+                            abs(actual - requested) <= 1 + 1e-6
+                            for actual, requested in zip(
+                                frontend["position"], requested_frontend, strict=True
+                            )
+                        )
+                        and value["cursor"] == expected_child
+                    )
+
+                observe(
+                    inner,
+                    config,
+                    phase,
+                    endpoint_reached,
+                    description="first pointer entry",
+                )
+                # Probe a second, off-grid point without altering the strict
+                # first-entry result. Expected values use requested pixels and
+                # geometry, never the observed pointer or a fitted offset.
+                pixels = (
+                    round(child_output["geometry"]["width"] * scale),
+                    round(child_output["geometry"]["height"] * scale),
+                )
+                offgrid_pixels = tuple(round(0.9 * (extent - 1)) for extent in pixels)
+                offgrid = physical(
+                    window["client"]["x"] + offgrid_pixels[0] / scale,
+                    window["client"]["y"] + offgrid_pixels[1] / scale,
+                )
+                # Workspace::cursorPos is QPoint, backed by QPointF::toPoint().
+                # Its nearest-integer conversion is part of the observer API.
+                offgrid_expected = {}
+                for index, axis in enumerate(("x", "y")):
+                    coordinate = (
+                        child_output["geometry"][axis]
+                        + offgrid[index] / scale
+                        + origin[axis]
+                        - window["client"][axis]
+                    )
+                    offgrid_expected[axis] = int(
+                        coordinate + (0.5 if coordinate >= 0 else -0.5)
+                    )
+                report["pointer_offgrid"] = {
+                    "framebuffer_pixels": pixels,
+                    "requested_local_pixels": offgrid_pixels,
+                    "parent_physical": offgrid,
+                    "requested_child_logical_integer": offgrid_expected,
+                    "physical_tolerance": 1,
+                    "arithmetic_epsilon": 1e-6,
+                    "motion_events": 1,
+                }
+                offgrid_frontend = [
+                    offgrid[index] - (window["client"][axis] - origin[axis]) * scale
+                    for index, axis in enumerate(("x", "y"))
+                ]
+                report["pointer_offgrid"]["requested_frontend_physical"] = (
+                    offgrid_frontend
+                )
+                client.pointer(*offgrid)
+
+                def offgrid_reached(
+                    value,
+                    reached=endpoint_reached,
+                    report=report,
+                    requested_frontend=offgrid_frontend,
+                ):
+                    return reached(
+                        value,
+                        point_report=report["pointer_offgrid"],
+                        requested_frontend=requested_frontend,
+                    )
+
+                observe(
+                    inner,
+                    config,
+                    phase,
+                    offgrid_reached,
+                    description="off-grid pointer",
+                )
+                title = physical(
+                    frame["x"] + frame["width"] / 2,
+                    (frame["y"] + window["client"]["y"]) / 2,
+                )
+                client.drag(*title, round(40 * scale), round(20 * scale))
+                moved = {**frame, "x": frame["x"] + 40, "y": frame["y"] + 20}
+                state = observe(
+                    parent,
+                    host_config,
+                    phase,
+                    lambda value, moved=moved: frame_is(value, moved),
+                )
+                _, moved_banner, _ = screenshot(
+                    phase, "02-moved", scale, only_window(state)
+                )
+                assert (
+                    abs(moved_banner[0] - before[0] - 40 * scale) <= 2
+                    and abs(moved_banner[1] - before[1] - 20 * scale) <= 2
+                ), "Outer move did not move the rendered child"
+                # Breeze resize-only input borders sit outside frameGeometry.
+                edge = physical(
+                    moved["x"] + moved["width"] + 1, moved["y"] + moved["height"] + 1
+                )
+                client.drag(*edge, round(60 * scale), round(30 * scale))
+                resized = {
+                    **moved,
+                    "width": moved["width"] + 60,
+                    "height": moved["height"] + 30,
+                }
+                state = observe(
+                    parent,
+                    host_config,
+                    phase,
+                    lambda value, resized=resized: frame_is(value, resized),
+                )
+                report["resized"] = only_window(state)
+                after_output = only_output(
+                    nested_kwin_state(runtime, inner, config, phase)
+                )
+                if config.get("PLASMA_SOFTWARE_NESTED") == "1":
+                    assert child_output == after_output, (
+                        "RemoteResize=0 relay unexpectedly resized the child output"
+                    )
+                else:
+                    assert abs(after_output["scale"] - scale) < 1e-6
+                    assert after_output["geometry"] != child_output["geometry"], (
+                        "Native nested output did not follow the outer resize"
+                    )
+                report["child_output_after"] = after_output
+                _, banner, save = screenshot(
+                    phase, "03-resized", scale, only_window(state)
+                )
+                client.click((banner[0] + banner[2]) // 2, (banner[3] + save[1]) // 2)
+                client.text(f"Outer {scale:g} AaZz 019!?")
+                client.chord(0xFFE3, ord("s"))
+                expected = f"Outer {scale:g} AaZz 019!?"
+                deadline = time.monotonic() + 10
+                while output.read_text() != expected:
+                    assert time.monotonic() < deadline, (
+                        "Resized Qt input/save did not reach its host file"
+                    )
+                    time.sleep(0.1)
+                client.screenshot().save(phase / "04-input-saved.png")
+                report.update(
+                    passed=True,
+                    application_scale=(banner[3] - banner[1]) / 44,
+                    expected=expected,
+                )
+            except Exception:
+                (phase / "failure.log").write_text(traceback.format_exc())
+                raise
+            finally:
+                (phase / "result.json").write_text(json.dumps(report, indent=2) + "\n")
+                collect_artifacts(
+                    runtime, inner, phase, services=("session", "vnc", "nested-x11")
+                )
+            reports.append(report)
+        return reports
+    finally:
+        try:
+            if client:
+                client.close()
+        finally:
+            collect_artifacts(runtime, parent, directory, services=("session", "vnc"))
+
+
 def launch_checked(case, label, *arguments, **settings):
     result = launch(*arguments, **settings)
     (case / f"{label}-run.log").write_text(result.stdout + result.stderr)
@@ -757,6 +1406,19 @@ def main():
                 ]
                 if options.no_gpu:
                     common += software_options(runtime)
+                if options.kiosk and backend == "wayland" and host == "wayland":
+                    report["outer_window"] = nested_window_phases(
+                        runtime,
+                        options.image,
+                        host_image,
+                        case,
+                        common,
+                        no_gpu=options.no_gpu,
+                    )
+                    assert len(report["outer_window"]) == 3
+                    report["checks"]["cold-scale-ssd-resize-input"] = all(
+                        phase["passed"] for phase in report["outer_window"]
+                    )
                 launch_checked(
                     case,
                     "host",

@@ -6,6 +6,7 @@
 !build/normalize-runtime
 !build/collect-artifacts
 !build/tigervnc-viewer
+!build/xwayland-frontend
 !build/arch-kwin-x11
 !build/kwin-*
 !build/kwin-phases/**
@@ -33,6 +34,9 @@
 !test/
 !test/egl-fence-stub.cpp
 !test/egl-fence-test.cpp
+!test/xwayland-pointer-unit.c
+!test/xwayland-pointer-unit.py
+!test/xwayland-rootful-ready-unit.c
 !test/native/
 !test/native/**
 **/__pycache__

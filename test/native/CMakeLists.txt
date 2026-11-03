@@ -153,6 +153,14 @@ set_tests_properties(pointer-enter-wire-warp-baseline pointer-enter-wire-warp-fi
 add_executable(fixture-unit fixture-unit.cpp)
 find_program(TIGERVNC_TEST_PROGRAM NAMES viewport-enter
     PATHS /tigervnc-build/vncviewer NO_DEFAULT_PATH REQUIRED)
+find_program(XWAYLAND_POINTER_TEST_PROGRAM NAMES pointer-unit
+    PATHS /xwayland-build/pointer-unit NO_DEFAULT_PATH REQUIRED)
+add_test(NAME xwayland-pointer-precision COMMAND "${XWAYLAND_POINTER_TEST_PROGRAM}")
+set_tests_properties(xwayland-pointer-precision PROPERTIES TIMEOUT 30)
+find_program(XWAYLAND_READY_TEST_PROGRAM NAMES pointer-unit
+    PATHS /xwayland-build/rootful-ready-unit NO_DEFAULT_PATH REQUIRED)
+add_test(NAME xwayland-rootful-readiness COMMAND "${XWAYLAND_READY_TEST_PROGRAM}")
+set_tests_properties(xwayland-rootful-readiness PROPERTIES TIMEOUT 30)
 add_test(NAME tigervnc-pointer-enter COMMAND "${TIGERVNC_TEST_PROGRAM}")
 set_tests_properties(tigervnc-pointer-enter PROPERTIES TIMEOUT 30)
 find_program(TIGERVNC_CRYPTO_TEST_PROGRAM NAMES viewer-crypto

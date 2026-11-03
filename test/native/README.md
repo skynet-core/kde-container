@@ -5,6 +5,13 @@ Wayland harness checks the real pointer callbacks and protocol messages; Qt
 events drive the fixture and clipboard code. The tests link the patched
 TigerVNC viewer objects and KRFB PipeWire framebuffer objects used by the image,
 including the actual KRFB damage method and LibVNCServer modified regions.
+The private Xwayland build also compiles its real input callback and valuator
+implementation into a 448-case regression, replacing only the event-queue boundary.
+Every distro build runs it before installing the frontend; the native CTest plan
+records the same binary as `xwayland-pointer-precision`. A second actual callback
+unit checks initial configure/preferred-scale ordering, integer-output entry and
+rootless exclusion; its binary is also mandatory before installation and is
+recorded as `xwayland-rootful-readiness`.
 
 The regressions cover pointer entry with one event, scaled and offset outputs,
 caller preload restoration, XTest calibration flushing, full SHA1/AES buffers,

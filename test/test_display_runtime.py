@@ -35,7 +35,7 @@ GPU = importlib.util.module_from_spec(GPU_SPEC)
 GPU_LOADER.exec_module(GPU)
 
 
-def shell_calls(source, environment, executables):
+def shell_calls(source, environment, executables, arguments=()):
     """Run the real shell flow with recorders only at executable boundaries."""
     with tempfile.TemporaryDirectory() as directory:
         for executable in executables:
@@ -46,12 +46,12 @@ def shell_calls(source, environment, executables):
                 'print(json.dumps({"program": os.path.basename(sys.argv[0]), '
                 '"argv": sys.argv[1:], "environment": {key: os.environ.get(key) '
                 'for key in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", '
-                '"LIBGL_ALWAYS_SOFTWARE", "XDG_SESSION_TYPE")}}), flush=True)\n'
+                '"LIBGL_ALWAYS_SOFTWARE", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS")}}), flush=True)\n'
             )
             stub.chmod(0o755)
             source = source.replace(executable, str(stub))
         result = subprocess.run(
-            ["/bin/bash", "-c", source, "plasma-test"],
+            ["/bin/bash", "-c", source, "plasma-test", *arguments],
             env={**os.environ, **environment},
             text=True,
             capture_output=True,
@@ -61,6 +61,218 @@ def shell_calls(source, environment, executables):
 
 
 class RenderingPolicyTests(unittest.TestCase):
+    def test_modern_frontend_cli_uses_private_precision_fixed_server_without_preload_changes(
+        self,
+    ):
+        helper = SOURCE.parent / "plasma-nested-x11"
+        program = '''exec() { printf '%s\\0' "$@" "PRELOAD=${LD_PRELOAD-}" "ORIGINAL=${PLASMA_KWIN_ORIGINAL_LD_PRELOAD-}"; exit 0; }; source "$1" "${@:2}"'''
+        for original in ("", "libm.so.6"):
+            with self.subTest(original=original):
+                result = subprocess.run(
+                    ["/bin/bash", "-c", program, "test", str(helper), "--display"],
+                    env={
+                        "HOST_WAYLAND_DISPLAY": "/run/host/wayland",
+                        "PLASMA_SOFTWARE_DISPLAY": ":110",
+                        "DISPLAY_WIDTH": "1280",
+                        "DISPLAY_HEIGHT": "960",
+                        "LD_PRELOAD": original,
+                    },
+                    capture_output=True,
+                    check=True,
+                )
+                values = result.stdout.decode().split("\0")
+                self.assertEqual(
+                    values[:2], ["/usr/local/libexec/plasma-xwayland", ":110"]
+                )
+                self.assertIn("-hidpi", values)
+                self.assertIn("-decorate", values)
+                self.assertIn("ORIGINAL=", values)
+                self.assertIn("PRELOAD=" + original, values)
+
+    def test_scaled_frontend_requires_matching_guest_scale_and_physical_mode(self):
+        environment = {
+            "DISPLAY_BACKEND": "wayland",
+            "DISPLAY_MODE": "nested",
+            "HOST_DISPLAY_BACKEND": "wayland",
+            "PLASMA_SOFTWARE_NESTED": "1",
+            "PLASMA_SOFTWARE_CAPTURE": "0",
+            "DISPLAY_WIDTH": "800",
+            "DISPLAY_HEIGHT": "600",
+        }
+        for scale, width, height in (
+            (1, 800, 600),
+            (1.2, 960, 720),
+            (1.25, 1000, 750),
+            (4 / 3, 1067, 800),
+            (2, 1600, 1200),
+        ):
+            current = {
+                "enabled": True,
+                "id": 3,
+                "name": "Virtual-Plasma",
+                "pos": {"x": 0, "y": 0},
+                "scale": scale,
+                "currentModeId": 2,
+                "modes": [{"id": "2", "size": {"width": width, "height": height}}],
+            }
+            with (
+                self.subTest(scale=scale),
+                patch.dict(os.environ, environment, clear=True),
+                patch.object(REMOTE, "frontend_scale", return_value=scale),
+            ):
+                self.assertTrue(REMOTE.configured([current]))
+                self.assertFalse(
+                    REMOTE.configured([{**current, "scale": scale + 0.25}])
+                )
+                self.assertFalse(REMOTE.configured([{**current, "currentModeId": 99}]))
+                for dimensions in (
+                    {"width": width + 1, "height": height},
+                    {"width": width, "height": height + 1},
+                ):
+                    self.assertFalse(
+                        REMOTE.configured(
+                            [{**current, "modes": [{"id": "2", "size": dimensions}]}]
+                        )
+                    )
+
+    def test_scaled_readiness_does_not_change_legacy_x11_or_public_output_contracts(
+        self,
+    ):
+        base = {
+            "DISPLAY_BACKEND": "wayland",
+            "DISPLAY_MODE": "nested",
+            "HOST_DISPLAY_BACKEND": "wayland",
+            "PLASMA_SOFTWARE_NESTED": "1",
+            "PLASMA_SOFTWARE_CAPTURE": "0",
+        }
+        for override, name in (
+            ({"PLASMA_SOFTWARE_CAPTURE": "1"}, "X11-0"),
+            ({"DISPLAY_BACKEND": "x11", "PLASMA_NVIDIA_NESTED": "1"}, "Virtual-Plasma"),
+            ({"HOST_DISPLAY_BACKEND": "x11"}, "Virtual-Plasma"),
+            ({"DISPLAY_MODE": "vnc"}, "Virtual-Plasma"),
+            ({"PLASMA_SOFTWARE_NESTED": "0"}, "Virtual-Plasma"),
+        ):
+            with (
+                self.subTest(override=override),
+                patch.dict(os.environ, {**base, **override}, clear=True),
+                patch.object(
+                    REMOTE,
+                    "frontend_scale",
+                    side_effect=AssertionError(
+                        "Legacy path must not inspect modern frontend"
+                    ),
+                ),
+            ):
+                self.assertTrue(
+                    REMOTE.configured(
+                        [{"enabled": True, "name": name, "pos": {"x": 0, "y": 0}}]
+                    )
+                )
+
+    def application_readiness(self, snapshots, *, never=False):
+        class Started(Exception):
+            pass
+
+        now, checks = 0.0, []
+        current = None
+        environment = {
+            "TARGET_APP": "/bin/true",
+            "DISPLAY_BACKEND": "wayland",
+            "DISPLAY_MODE": "nested",
+            "HOST_DISPLAY_BACKEND": "wayland",
+            "PLASMA_SOFTWARE_NESTED": "1",
+            "PLASMA_SOFTWARE_CAPTURE": "0",
+            "DISPLAY_WIDTH": "800",
+            "DISPLAY_HEIGHT": "600",
+        }
+
+        def sleep(seconds):
+            nonlocal now
+            now += seconds
+
+        def frontend():
+            if current[0] is None:
+                raise ValueError("Frontend metadata is not available")
+            return current[0]
+
+        def command(arguments, **_settings):
+            nonlocal current
+            if arguments == ["/usr/local/libexec/plasma-wait", "compositor"]:
+                return subprocess.CompletedProcess(arguments, 0)
+            self.assertEqual(
+                arguments, ["/usr/local/libexec/plasma-remote-output", "--check"]
+            )
+            current = snapshots[min(len(checks), len(snapshots) - 1)]
+            _front, guest, width, height = current
+            output = {
+                "enabled": True,
+                "name": "Virtual-Plasma",
+                "pos": {"x": 0, "y": 0},
+                "scale": guest,
+                "currentModeId": 1,
+                "modes": [{"id": "1", "size": {"width": width, "height": height}}],
+            }
+            try:
+                agreed = REMOTE.configured([output])
+            except ValueError:
+                agreed = False
+            checks.append(agreed)
+            return subprocess.CompletedProcess(arguments, 0 if agreed else 1)
+
+        def start(arguments, **settings):
+            self.assertEqual(arguments, ["/bin/true"])
+            self.assertEqual(checks, [False, False, False, False, True])
+            self.assertEqual(REMOTE.frontend_scale(), 1.25)
+            self.assertEqual(current, (1.25, 1.25, 1000, 750))
+            self.assertEqual(settings["env"]["DISPLAY_WIDTH"], "800")
+            self.assertEqual(settings["env"]["DISPLAY_HEIGHT"], "600")
+            raise Started
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(sys, "argv", [str(SOURCE)]),
+            patch.object(APP, "STATE", Path(directory) / "state.json"),
+            patch.object(APP.signal, "signal"),
+            patch.object(APP.time, "monotonic", side_effect=lambda: now),
+            patch.object(APP.time, "sleep", side_effect=sleep),
+            patch.object(REMOTE, "frontend_scale", side_effect=frontend),
+            patch.object(APP.subprocess, "run", side_effect=command),
+            patch.object(APP.subprocess, "Popen", side_effect=start) as popen,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            if never:
+                with self.assertRaisesRegex(
+                    RuntimeError, "Kiosk output did not become ready"
+                ):
+                    APP.main()
+                popen.assert_not_called()
+                self.assertFalse(any(checks))
+            else:
+                with self.assertRaises(Started):
+                    APP.main()
+                popen.assert_called_once()
+        return checks
+
+    def test_application_waits_for_late_and_changed_frontend_metadata_before_popen(
+        self,
+    ):
+        checks = self.application_readiness(
+            [
+                (None, 1, 800, 600),
+                (1.25, 1, 1000, 750),
+                (1.5, 1.25, 1000, 750),
+                (1.25, 1.25, 1000, 749),
+                (1.25, 1.25, 1000, 750),
+            ]
+        )
+        self.assertEqual(checks, [False, False, False, False, True])
+
+    def test_application_never_popens_without_matching_frontend_and_guest_output(self):
+        for snapshot in ((None, 1.25, 1000, 750), (1.25, 1, 800, 600)):
+            with self.subTest(snapshot=snapshot):
+                self.application_readiness([snapshot], never=True)
+
     def test_window_policy_is_generic_and_applies_only_to_normal_windows(self):
         for mode in (None, "fullscreen", "maximized"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
@@ -241,9 +453,75 @@ class RenderingPolicyTests(unittest.TestCase):
                     ],
                 )
 
+    def test_modern_frontend_is_created_early_with_hidpi_then_reused(self):
+        environment = {
+            "DISPLAY_BACKEND": "wayland",
+            "DISPLAY_MODE": "nested",
+            "HOST_DISPLAY_BACKEND": "wayland",
+            "HOST_WAYLAND_DISPLAY": "/private-host/wayland",
+            "PLASMA_SOFTWARE_DISPLAY": ":110",
+            "PLASMA_SOFTWARE_CAPTURE": "0",
+            "PLASMA_SOFTWARE_NESTED": "1",
+            "DISPLAY_WIDTH": "800",
+            "DISPLAY_HEIGHT": "600",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/plasma/bus",
+        }
+        delegate = shell_calls(
+            (SOURCE.parent / "plasma-software-display").read_text(),
+            environment,
+            ("/usr/local/libexec/plasma-nested-x11",),
+        )[0]
+        self.assertEqual(delegate["program"], "plasma-nested-x11")
+        self.assertEqual(delegate["argv"], ["--display"])
+        frontend = shell_calls(
+            (SOURCE.parent / "plasma-nested-x11").read_text(),
+            environment,
+            ("/usr/local/libexec/plasma-xwayland",),
+            arguments=("--display",),
+        )[0]
+        self.assertEqual(
+            frontend["argv"][:3], [":110", "-auth", "/etc/plasma/Xauthority"]
+        )
+        for flag in ("-decorate", "-hidpi", "-shm", "-nolisten", "tcp"):
+            self.assertIn(flag, frontend["argv"])
+        self.assertEqual(
+            frontend["environment"]["WAYLAND_DISPLAY"], "/private-host/wayland"
+        )
+
+        guest_bus = environment["DBUS_SESSION_BUS_ADDRESS"]
+        self.assertEqual(delegate["environment"]["DBUS_SESSION_BUS_ADDRESS"], guest_bus)
+        self.assertEqual(
+            frontend["environment"]["DBUS_SESSION_BUS_ADDRESS"],
+            "unix:path=/dev/null",
+        )
+        late = shell_calls(
+            (SOURCE.parent / "plasma-nested-x11").read_text(),
+            environment,
+            (
+                "/usr/local/libexec/plasma-wait",
+                "/usr/bin/vncviewer",
+                "dbus-run-session",
+            ),
+        )
+        self.assertEqual(
+            [call["program"] for call in late], ["plasma-wait", "dbus-run-session"]
+        )
+        for call in late:
+            self.assertEqual(call["environment"]["DBUS_SESSION_BUS_ADDRESS"], guest_bus)
+        guest = shell_calls(
+            (SOURCE.parent / "plasma-session").read_text(),
+            {**environment, "TARGET_APP": ""},
+            ("/usr/bin/startplasma-wayland",),
+        )[0]
+        self.assertEqual(guest["program"], "startplasma-wayland")
+        self.assertEqual(guest["environment"]["DBUS_SESSION_BUS_ADDRESS"], guest_bus)
+
     def test_legacy_backing_and_frontend_use_separate_authenticated_displays(self):
         helper = SOURCE.parent / "plasma-nested-x11"
         environment = {
+            "DISPLAY_BACKEND": "wayland",
+            "DISPLAY_MODE": "nested",
+            "PLASMA_SOFTWARE_NESTED": "1",
             "HOST_DISPLAY_BACKEND": "wayland",
             "HOST_WAYLAND_DISPLAY": "/private-host/wayland",
             "PLASMA_X11_DISPLAY": ":100",
@@ -272,10 +550,16 @@ class RenderingPolicyTests(unittest.TestCase):
                     ),
                 )
                 calls = {row["program"]: row for row in records}
-                self.assertEqual(calls["Xwayland"]["argv"][0], frontend)
-                self.assertEqual(
-                    calls["Xwayland"]["argv"][1:3], ["-auth", "/etc/plasma/Xauthority"]
-                )
+                if capture == "1":
+                    self.assertEqual(calls["Xwayland"]["argv"][0], frontend)
+                    self.assertEqual(
+                        calls["Xwayland"]["argv"][1:3],
+                        ["-auth", "/etc/plasma/Xauthority"],
+                    )
+                    self.assertIn("-decorate", calls["Xwayland"]["argv"])
+                    self.assertNotIn("-hidpi", calls["Xwayland"]["argv"])
+                else:
+                    self.assertNotIn("Xwayland", calls)
                 for name in ("plasma-wait", "dbus-run-session"):
                     self.assertEqual(calls[name]["environment"]["DISPLAY"], frontend)
                     self.assertEqual(
@@ -297,7 +581,7 @@ class RenderingPolicyTests(unittest.TestCase):
                     self.assertIn(argument, viewer)
         backing = shell_calls(
             (SOURCE.parent / "plasma-software-display").read_text(),
-            environment,
+            {**environment, "PLASMA_SOFTWARE_CAPTURE": "1"},
             ("/usr/bin/Xvfb",),
         )[0]
         self.assertEqual(
@@ -388,13 +672,43 @@ class RenderingPolicyTests(unittest.TestCase):
             "plasma-software-display.service", session["Unit"]["After"].split()
         )
         condition = backing["Service"]["ExecCondition"]
-        for capture, expected in (("0", 1), ("1", 0)):
-            result = subprocess.run(
-                ["/bin/bash", "-c", condition],
-                env={**os.environ, "PLASMA_SOFTWARE_CAPTURE": capture},
-                check=False,
-            )
-            self.assertEqual(result.returncode, expected)
+        self.assertEqual(
+            condition, "/usr/local/libexec/plasma-software-display --check"
+        )
+        self.assertEqual(
+            backing["Service"]["ExecStartPost"],
+            "/usr/local/libexec/plasma-remote-output --prepare",
+        )
+        self.assertEqual(backing["Service"]["Restart"], "always")
+        self.assertEqual(
+            unit("plasma-nested-x11.service")["Service"]["Restart"], "always"
+        )
+        for backend, mode, host, capture, nested, expected in (
+            ("wayland", "nested", "wayland", "0", "1", 0),
+            ("wayland", "nested", "wayland", "1", "1", 0),
+            ("wayland", "headless", "none", "1", "0", 0),
+            ("wayland", "nested", "x11", "0", "1", 1),
+            ("x11", "nested", "wayland", "0", "0", 1),
+            ("wayland", "vnc", "none", "0", "0", 1),
+            ("wayland", "headless", "none", "0", "0", 1),
+        ):
+            with self.subTest(backend=backend, mode=mode, host=host, capture=capture):
+                result = subprocess.run(
+                    [
+                        "/bin/bash",
+                        str(SOURCE.parent / "plasma-software-display"),
+                        "--check",
+                    ],
+                    env={
+                        "DISPLAY_BACKEND": backend,
+                        "DISPLAY_MODE": mode,
+                        "HOST_DISPLAY_BACKEND": host,
+                        "PLASMA_SOFTWARE_CAPTURE": capture,
+                        "PLASMA_SOFTWARE_NESTED": nested,
+                    },
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected)
 
     def test_debian_nvidia_remote_fallback_does_not_override_source_compositor(self):
         for overlay, backend, mode, distro, version, vendor, expected in (

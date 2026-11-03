@@ -160,6 +160,8 @@ jobs:
           uv run test/clipboard.py --image "$UI_IMAGE" --backends "${backends[@]}" \
               --host-backends wayland x11 \
               --no-gpu 2>&1 | tee test/.artifacts/clipboard.log
+          # Each distro's Wayland-on-Wayland kiosk row also requires three fresh
+          # scaled SSD/outer drag/resize/output/input phases before clipboard tests.
           read -r -a kiosk_backends <<< "$KIOSK_BACKENDS"
           uv run test/clipboard.py --image "$UI_IMAGE" --kiosk \
               --backends "${kiosk_backends[@]}" --host-backends wayland x11 \
