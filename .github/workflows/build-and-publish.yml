@@ -21,7 +21,12 @@ permissions:
 
 concurrency:
   group: images-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Finish exporting compiled dependencies before starting the newest revision.
+  cancel-in-progress: false
+
+env:
+  CACHE_SCOPE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || format('sha-{0}', github.sha) }}
+  CACHE_WRITE: ${{ github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
 jobs:
   images:
@@ -89,6 +94,13 @@ jobs:
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
+      - name: Log in to GHCR for build cache and publication
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Image tags and OCI labels
         id: meta
         uses: docker/metadata-action@v6
@@ -115,8 +127,13 @@ jobs:
           load: true
           tags: ${{ env.PRODUCTION_IMAGE }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=plasma6-${{ matrix.distro }}
-          cache-to: type=gha,scope=plasma6-${{ matrix.distro }},mode=max
+          cache-from: |
+            type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-${{ matrix.distro }}-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-${{ matrix.distro }}-main
+            type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-native-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-native-main
+            type=gha,scope=plasma6-${{ matrix.distro }}
+          cache-to: ${{ env.CACHE_WRITE == 'true' && format('type=registry,ref={0}:buildcache-{1}-{2},mode=max', steps.registry.outputs.image, matrix.distro, env.CACHE_SCOPE) || '' }}
 
       - name: Verify init, systemd targets and production desktop
         env:
@@ -136,7 +153,9 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: ${{ env.UI_IMAGE }}
-          cache-from: type=gha,scope=plasma6-${{ matrix.distro }}
+          cache-from: |
+            type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-${{ matrix.distro }}-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-${{ matrix.distro }}-main
 
       - name: Verify Chromium sandbox fallback with user namespaces denied
         run: |
@@ -166,14 +185,6 @@ jobs:
           uv run test/clipboard.py --image "$UI_IMAGE" --kiosk \
               --backends "${kiosk_backends[@]}" --host-backends wayland x11 \
               --no-gpu 2>&1 | tee test/.artifacts/clipboard-kiosk.log
-
-      - name: Log in to GHCR
-        if: steps.registry.outputs.publish == 'true'
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish the tested production image
         if: steps.registry.outputs.publish == 'true'

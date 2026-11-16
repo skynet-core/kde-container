@@ -66,6 +66,28 @@ Each source phase has its own cached stage. The final `plasma6` image copies onl
 the collected runtime tree; source archives, compilers and build tools stay
 in the builder stages.
 
+## CI artifact cache
+
+CI exports all intermediate stages to GHCR with BuildKit's `mode=max`, including
+compiled Qt, Frameworks, KWin, KRFB, TigerVNC and Xwayland layers. Later builds
+pull matching layers and copy their artifacts into the runtime image. BuildKit
+invalidates only stages affected by source, patch, command or base-image changes.
+
+Tags are `ghcr.io/skynet-core/kde-container:buildcache-<distro>-<scope>`.
+Main writes the shared `main` scope. Each same-repository PR writes its own
+`pr-<number>` scope and reads both that and main; other manual/tag builds use
+`sha-<commit>`. Fork and Dependabot PRs only read caches. Existing Actions caches
+remain a read-only migration source, avoiding further large uploads to the
+repository's Actions cache quota. Cache publication is independent of production
+image publication; all existing runtime acceptance gates still run.
+New runs queue behind the running workflow, keeping only the newest pending run,
+so source compilation can finish exporting its cache before the next revision.
+The native regression SDK has its own `native` cache and shares matching build
+layers with the Fedora image job. Native containers use `--init` so Xvfb can
+deliver its readiness signal to the test launcher below PID 1.
+Its source dependency stage is exported before compiling the regression tests,
+so test-build failures preserve the completed dependency cache.
+
 Fedora and Arch retain their distribution Wayland compositor and build the
 separate, namespaced KWin-X11 6.7.5 release with `build/arch-kwin-x11`. Arch no
 longer packages X11 KWin, while Fedora's KWin 6.8 conflicts with its older X11
