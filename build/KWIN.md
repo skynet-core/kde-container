@@ -80,6 +80,8 @@ Main writes the shared `main` scope. Each same-repository PR writes its own
 remain a read-only migration source, avoiding further large uploads to the
 repository's Actions cache quota. Cache publication is independent of production
 image publication; all existing runtime acceptance gates still run.
+New runs queue behind the running workflow, keeping only the newest pending run,
+so source compilation can finish exporting its cache before the next revision.
 The native regression SDK has its own `native` cache and shares matching build
 layers with the Fedora image job. Native containers use `--init` so Xvfb can
 deliver its readiness signal to the test launcher below PID 1.
