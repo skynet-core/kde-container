@@ -18,7 +18,9 @@ caller preload restoration, XTest calibration flushing, full SHA1/AES buffers,
 first framebuffer allocation, RGBX channel layout, padded rows and resize/null
 frames, inclusive/exclusive damage edges, and clipboard transport metadata.
 The pinned KPipeWire private cleanup declaration retains its original license
-and is checksum-checked before the frame callback test is compiled.
+and is checksum-checked before the frame callback test is compiled. Its full
+header also matches [KPipeWire 6.8.3](https://github.com/KDE/kpipewire/blob/v6.8.3/src/pwhelpers.h)
+byte for byte (SHA-256 `49484762ba4172a7d8391d71c4f6216dffa5a9c74163a0f9dcb645deb6a0145b`).
 
 Build the isolated SDK from the maintained Fedora build stages:
 
@@ -26,7 +28,7 @@ Build the isolated SDK from the maintained Fedora build stages:
 mkdir -p test/.artifacts/native
 cat Dockerfile.fedora-44 test/native/Dockerfile.fragment > test/.artifacts/native/Dockerfile
 docker build --target native-tests -f test/.artifacts/native/Dockerfile -t plasma6:native-tests .
-docker run --rm --network none \
+docker run --rm --init --network none \
   --mount "type=bind,source=$PWD/test/.artifacts/native,target=/results" plasma6:native-tests
 ```
 

@@ -129,6 +129,8 @@ jobs:
           cache-from: |
             type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-${{ matrix.distro }}-${{ env.CACHE_SCOPE }}
             type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-${{ matrix.distro }}-main
+            type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-native-${{ env.CACHE_SCOPE }}
+            type=registry,ref=${{ steps.registry.outputs.image }}:buildcache-native-main
             type=gha,scope=plasma6-${{ matrix.distro }}
           cache-to: ${{ env.CACHE_WRITE == 'true' && format('type=registry,ref={0}:buildcache-{1}-{2},mode=max', steps.registry.outputs.image, matrix.distro, env.CACHE_SCOPE) || '' }}
 
